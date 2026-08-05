@@ -1,0 +1,195 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: polycode-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: polycode-redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes
+    ports:
+      - "${REDIS_PORT}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: polycode-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "${RABBITMQ_PORT}:5672"
+      - "${RABBITMQ_MGMT_PORT}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: ../../apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_GATEWAY_URL: http://localhost:${GATEWAY_PORT}
+    container_name: polycode-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT}:3000"
+    environment:
+      - NEXT_PUBLIC_GATEWAY_URL=http://localhost:${GATEWAY_PORT}
+      - GATEWAY_INTERNAL_URL=http://gateway:8080
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: ../../gateway/nest-gateway
+      dockerfile: Dockerfile
+    container_name: polycode-gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT}:8080"
+    environment:
+      - PORT=8080
+      - AUTH_SERVICE_URL=http://auth-service:8081
+      - JUDGE_SERVICE_URL=http://judge-service:8082
+      - RABBITMQ_MGMT_URL=http://rabbitmq:15672
+      - GATEWAY_URL=http://gateway:8080
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - AMQP_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      - JUDGE_QUEUE=judge.submissions
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB}
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build:
+      context: ../../services/auth-service-java
+      dockerfile: Dockerfile
+    container_name: polycode-auth
+    restart: unless-stopped
+    # 不暴露宿主端口：仅内部网络可达（网关代理 /api/auth）。
+    # 防绕过网关限流/锁定直接对 auth-service 爆破或枚举。
+    environment:
+      - SERVER_PORT=8081
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      - SPRING_DATASOURCE_USERNAME=${POSTGRES_USER}
+      - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD}
+      - AUTH_JWT_SECRET=${AUTH_JWT_SECRET}
+      - AUTH_JWT_EXPIRATION_SECONDS=${AUTH_JWT_EXPIRATION_SECONDS}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8081/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  judge-service:
+    build:
+      context: ../../services/judge-service-python
+      dockerfile: Dockerfile
+    container_name: polycode-judge
+    restart: unless-stopped
+    ports:
+      - "${JUDGE_PORT}:8082"
+    environment:
+      - PORT=8082
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - AMQP_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      - JUDGE_QUEUE=judge.submissions
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB}
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8082/health')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  judge-worker:
+    build:
+      context: ../../services/judge-service-python
+      dockerfile: Dockerfile
+    container_name: polycode-judge-worker
+    restart: unless-stopped
+    command: ["python", "-u", "-m", "app.worker"]
+    # /tmp 挂 tmpfs 并限额：判题工作目录与用户代码都写 /tmp，
+    # 防止沙箱用户代码写满磁盘（RLIMIT_FSIZE 只管单文件，挡不住多文件累计）
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    environment:
+      - AMQP_URL=amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      - JUDGE_QUEUE=judge.submissions
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${POSTGRES_DB}
+      - DB_USER=${POSTGRES_USER}
+      - DB_PASSWORD=${POSTGRES_PASSWORD}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:

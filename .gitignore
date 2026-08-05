@@ -1,0 +1,37 @@
+# Node
+node_modules/
+.next/
+dist/
+*.tsbuildinfo
+
+# Java
+**/target/
+**/.mvn/wrapper/maven-wrapper.jar
+
+# Python
+**/__pycache__/
+**/.pytest_cache/
+**/.venv/
+
+# Env
+.env
+.env.example.bak
+*.env.local
+
+# Logs
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Reasonix 工具会话元数据
+.reasonix/
+skills-lock.json
+
+# 构建产物
+.dist/

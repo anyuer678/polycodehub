@@ -1,0 +1,20 @@
+server:
+  port: ${SERVER_PORT:8081}
+
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/polycodehub}
+    username: ${SPRING_DATASOURCE_USERNAME:polycode}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+auth:
+  jwt:
+    secret: ${AUTH_JWT_SECRET}
+    expiration-seconds: ${AUTH_JWT_EXPIRATION_SECONDS:86400}
