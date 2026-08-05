@@ -1,5 +1,6 @@
 # PolyCodeHub
 
+[![GitHub Pages](https://img.shields.io/badge/%F0%9F%8C%90-%E5%9C%A8%E7%BA%BF%E9%A2%84%E8%A7%88-2ea44f)](https://anyuer678.github.io/polycodehub/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue)](https://www.typescriptlang.org/)
 [![Python](https://img.shields.io/badge/Python-3.12-green)](https://www.python.org/)
@@ -85,6 +86,7 @@ docker compose -f infra/docker/docker-compose.yml --env-file infra/docker/.env u
 | 服务 | 地址 |
 |------|------|
 | Web | http://localhost:3000 |
+| 在线预览（GitHub Pages） | https://anyuer678.github.io/polycodehub/ |
 | Gateway Health | http://localhost:8080/health |
 | Judge API Health | http://localhost:8082/health |
 | RabbitMQ 管理台 | http://localhost:15672 |
