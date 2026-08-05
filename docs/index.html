@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PolyCodeHub — 全栈在线判题平台</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 48px 24px 64px; }
+  .badge { display: inline-block; font-size: 13px; color: var(--accent);
+    border: 1px solid var(--border); border-radius: 999px; padding: 2px 12px; margin-bottom: 16px; }
+  h1 { font-size: 40px; letter-spacing: -0.5px; margin-bottom: 8px; }
+  h1 .dot { color: var(--green); }
+  .sub { color: var(--muted); font-size: 17px; margin-bottom: 36px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 28px 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+  .card h3 { font-size: 15px; margin-bottom: 8px; color: var(--accent); }
+  .card p { font-size: 14px; color: var(--muted); }
+  h2 { font-size: 20px; margin: 36px 0 12px; }
+  .stack { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 12px; font-size: 13px; color: var(--text); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border);
+    color: var(--muted); font-size: 13px; }
+  code { background: var(--card); border: 1px solid var(--border); border-radius: 4px;
+    padding: 1px 6px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="badge">GPL-3.0 · 全栈 · 在线判题</span>
+  <h1>PolyCodeHub<span class="dot">.</span></h1>
+  <p class="sub">全栈在线判题（OJ）平台 — 题库练习 · 代码评测 · 比赛 · 每日一题 · 开发者社区</p>
+
+  <div class="cards">
+    <div class="card">
+      <h3>⚡ 真实判题沙箱</h3>
+      <p>Python / Node.js / C++ / C / Java 多语言评测，进程级隔离：setuid 降权 + seccomp 网络隔离 + 资源限制 + 环境清洗。</p>
+    </div>
+    <div class="card">
+      <h3>🏆 竞赛与排行</h3>
+      <p>比赛系统（AC 数 + 罚时实时榜单）、总榜/周榜/月榜、每日一题北京时间结算、成就徽章。</p>
+    </div>
+    <div class="card">
+      <h3>👥 开发者社区</h3>
+      <p>题解与评论、关注/粉丝、公开主页热力图与留言板、代码分享链接、站内信通知。</p>
+    </div>
+    <div class="card">
+      <h3>🛡️ 安全工程实践</h3>
+      <p>JWT HttpOnly Cookie、鉴权缓存失效机制、限流 fail-closed、审计日志、凭据全环境变量化。</p>
+    </div>
+  </div>
+
+  <h2>技术栈</h2>
+  <div class="stack">
+    <span class="chip">Next.js + TypeScript</span>
+    <span class="chip">Express 网关</span>
+    <span class="chip">Java 21 / Spring Boot</span>
+    <span class="chip">Python 3.12 / FastAPI</span>
+    <span class="chip">PostgreSQL 16</span>
+    <span class="chip">Redis 7</span>
+    <span class="chip">RabbitMQ</span>
+    <span class="chip">Docker Compose</span>
+  </div>
+
+  <h2>快速开始</h2>
+  <p style="color:var(--muted);font-size:15px;">
+    克隆仓库后执行 <code>scripts\start.ps1</code>（Windows）或
+    <code>docker compose -f infra/docker/docker-compose.yml up -d --build</code>，
+    访问 <code>http://localhost:3000</code>。
+  </p>
+
+  <footer>
+    PolyCodeHub · <a href="https://github.com/anyuer678/polycodehub" target="_blank" rel="noopener">GitHub 仓库</a> ·
+    <a href="https://github.com/anyuer678/polycodehub/blob/main/README.md" target="_blank" rel="noopener">README</a> ·
+    <a href="https://github.com/anyuer678/polycodehub/blob/main/LICENSE" target="_blank" rel="noopener">GPL-3.0 License</a>
+  </footer>
+</div>
+</body>
+</html>
