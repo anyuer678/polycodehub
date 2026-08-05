@@ -1,77 +1,67 @@
 # PolyCodeHub
 
-一个中大型、可运行的全栈工程项目：开发者平台 + 在线判题 + 排行榜 + 管理后台 + 异步任务链路。
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue)](https://www.typescriptlang.org/)
+[![Python](https://img.shields.io/badge/Python-3.12-green)](https://www.python.org/)
+[![Java](https://img.shields.io/badge/Java-21-orange)](https://www.java.com/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)](https://www.docker.com/)
 
-## 项目目标
+**全栈在线判题（OJ）平台** — 开发者社区 + 代码评测 + 排行榜 + 管理后台 + 异步任务链路。
 
-PolyCodeHub 用来练习并展示以下能力：
+支持 Web 端完整使用，覆盖题库练习、代码提交、实时判题、比赛、每日一题、题解分享与用户社区互动，判题运行在**进程级隔离沙箱**中。
 
-- 前后端协作开发（Web + API Gateway + 多后端服务）
-- 数据库建模与业务落库（PostgreSQL）
-- 缓存与排行榜（Redis ZSet）
-- 异步架构（RabbitMQ 队列 + Worker 消费）
-- 用户认证与权限（JWT + 简化 Admin）
-- 算法判题业务闭环（提交 -> 入队 -> 判题 -> 回写 -> 展示）
+## 功能特性
 
----
+### 判题核心
+- **多语言支持** — Python 3 / Node.js / C++ (g++ 14) / C (gcc 14) / Java 21
+- **真实判题沙箱** — 非容器进程级隔离：
+  - `setuid` 降权到专用 sandbox 用户 + 清空补充组
+  - **seccomp 网络隔离**（禁止 `AF_INET`/`AF_INET6`/`AF_NETLINK` socket，判题代码无法触达内网服务）
+  - 资源限制（虚拟内存 / CPU / 文件大小 / 进程数 / 文件描述符）
+  - 环境变量清洗（凭据不可见）、`site-packages` 权限收紧
+  - 子进程自身峰值内存统计（`__SB_RUSAGE__`），杜绝累计值导致的假 MLE
+  - 恶意程序（关闭 fd 后 sleep 死循环）会被超时机制终止，不会卡死 Worker
+- **判题状态机** — `PENDING → AC / WA / CE / RE / TLE / MLE`，幂等回写与排行榜计数联动
+- **自定义试运行** — 提交前用自定义 stdin 在线试跑代码
+- **测试用例管理** — 单条 / 批量 JSON 导入 / 编辑 / 删除
+
+### 平台功能
+- **题库** — 难度分级（EASY/MEDIUM/HARD）、标签、分页
+- **排行榜** — 总榜 / 周榜 / 月榜（Redis ZSet，断连自动降级查库）
+- **比赛系统** — 建赛、关联题目、进行中提交自动关联、实时榜单（AC 数 + 罚时）
+- **每日一题** — 北京时间自然日结算、结果公布、教师可提前结束
+- **题解系统** — 已 AC 用户发布题解 + 审核流 + 评论
+- **用户社区** — 关注/粉丝、公开主页留言板、答题热力图、成就徽章（9 枚）、站内信通知
+- **代码分享** — 提交详情生成 24 位 token 的只读分享链接
+- **公开主页模块可见性** — 每个模块可设 `public / self / hidden`，数据按可见性过滤下发
+- **管理后台** — 题目/用例/比赛/每日一题/题解审核/用户/公告/通知/审计日志/统计（角色分流：admin / teacher）
+
+### 安全与工程
+- 认证：JWT（HttpOnly Cookie）+ 网关鉴权缓存（版本号失效 + `exp` 过期校验）+ 登录失败锁定
+- 鉴权缓存登出即失效；认证端点限流 `fail-closed`（Redis 故障时拒绝而非放行）
+- 审计日志、统一响应结构（`code + message + requestId + data`）、限流、CORS 白名单、Zod 输入校验
+- 凭据全部走环境变量，`.env` 不入库，启动时校验非占位符
 
 ## 技术栈
 
-- 前端：`Next.js + TypeScript`
-- 网关：`Node.js + Express + TypeScript`
-- 认证服务：`Java Spring Boot`
-- 判题服务：`Python (FastAPI + Worker)`
-- 数据库：`PostgreSQL`
-- 缓存：`Redis`
-- 消息队列：`RabbitMQ`
-- 编排：`Docker Compose`
+| 层级 | 技术 |
+|------|------|
+| 前端 | Next.js + TypeScript |
+| API 网关 | Node.js + Express + TypeScript |
+| 认证服务 | Java 21 + Spring Boot |
+| 判题服务 | Python 3.12 + FastAPI + 进程级沙箱 |
+| 数据库 | PostgreSQL 16 |
+| 缓存 | Redis 7（排行榜 / 限流 / 鉴权缓存） |
+| 消息队列 | RabbitMQ（判题任务异步链路） |
+| 编排 | Docker Compose |
 
----
+## 快速开始
 
-## 当前核心功能
+### 环境要求
+- Docker Desktop（含 Docker Compose）
+- Windows（脚本）或任意可运行 Docker 的环境
 
-### 用户侧
-- 注册 / 登录
-- 浏览题库与题目详情
-- 在线提交代码
-- 异步轮询判题状态（PENDING -> AC/WA/CE/RE/TLE）
-- 查看提交列表与提交详情（含失败用例输入/期望/实际）
-- 查看排行榜（总榜/周榜/月榜）
-
-### 管理员侧
-- 题目管理：创建 / 更新 / 删除 / 列表
-- 测试用例管理：
-  - 单条创建
-  - 编辑 / 删除
-  - 批量 JSON 导入
-
-### 工程侧
-- 网关统一响应结构：`code + message + requestId + data`
-- 基础限流（按 IP 每分钟）
-- 审计日志（关键动作写入 `audit_logs`）
-
----
-
-## 目录结构
-
-- `apps/web`：前端
-- `gateway/nest-gateway`：API 网关
-- `services/auth-service-java`：认证服务
-- `services/judge-service-python`：判题 API + Worker
-- `infra/docker`：容器编排
-- `infra/sql`：数据库初始化 SQL
-
----
-
-## 快速启动（Windows）
-
-### 方式 A：一键启动脚本（推荐）
-
-在项目根目录双击运行：
-
-- `scripts\setup-and-start.bat`
-
-或直接执行核心脚本（功能相同，支持参数）：
+### 方式 A：一键启动（Windows，推荐）
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start.ps1
@@ -81,132 +71,60 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start.ps1
 #   -SkipEnv        跳过 .env 生成检查
 ```
 
-启动脚本自动完成：
-
-1. 检查 Docker 命令与 daemon（未就绪自动拉起 Docker Desktop 并等待最多 90s）
-2. 若 `infra\docker\.env` 不存在，自动用 `scripts\generate-env.ps1` 生成：
-   - PostgreSQL / Redis / RabbitMQ 随机强密码（32 位）
-   - `AUTH_JWT_SECRET` 随机 64 位密钥
-   - 账号统一默认 `polycodehub`，无任何占位符残留
-3. `docker compose up -d --build`（失败自动带 `--build` 重试一次）
-4. 轮询 Gateway / Web 健康检查（最多 120s），输出最终状态
-5. 所有输出实时写入 `logs\start-<时间戳>.log`
-
-如需清理环境，仍可运行 `scripts\stop-and-clean.bat`（可选删除数据卷）。
+脚本自动完成：检查 Docker daemon → 生成 `infra\docker\.env`（随机强密码 + JWT 密钥）→ `docker compose up -d --build` → 健康检查（最多 120s）→ 日志写入 `logs\`。
 
 ### 方式 B：手动命令
 
-1. 复制环境变量文件：
-
 ```bash
 copy infra\docker\.env.example infra\docker\.env
-```
-
-2. 启动服务：
-
-```bash
 docker compose -f infra/docker/docker-compose.yml --env-file infra/docker/.env up -d --build
 ```
 
-3. 访问地址：
+### 访问地址
 
-- Web: `http://localhost:3000`
-- Gateway Health: `http://localhost:8080/health`
-- Auth Health: `http://localhost:8081/actuator/health`
-- Judge API Health: `http://localhost:8082/health`
-- RabbitMQ 管理台: `http://localhost:15672`
+| 服务 | 地址 |
+|------|------|
+| Web | http://localhost:3000 |
+| Gateway Health | http://localhost:8080/health |
+| Judge API Health | http://localhost:8082/health |
+| RabbitMQ 管理台 | http://localhost:15672 |
+
+> 说明：认证服务（8081）与数据库等仅容器内网可达，不暴露宿主端口（防绕过网关限流）。
 
 ### 停止与清理
 
-可运行：
+```powershell
+scripts\stop-and-clean.bat   # 停止；可选删除数据卷（清空数据）
+scripts\diagnose-env.bat     # 环境诊断（Docker/端口/Compose）
+```
 
-- `scripts\stop-and-clean.bat`
+## 判题异步链路
 
-脚本会提示你：
+```
+前端提交 → 网关写 submissions(PENDING) → RabbitMQ 入队
+  → Judge Worker 消费 → 沙箱判题（多测试用例）
+  → 幂等回写结果 + 排行榜计数 → 前端轮询展示
+```
 
-- 仅停止并移除容器（保留 PostgreSQL 数据卷）
-- 或同时删除数据卷（会清空数据库数据）
+## 项目结构
 
-### 环境诊断
+```
+polycodehub/
+├── apps/
+│   └── web/                    # Next.js 前端（题库/判题/比赛/社区/管理后台）
+├── gateway/
+│   └── nest-gateway/           # API 网关（路由/鉴权/限流/审计/排行榜/每日一题结算）
+├── services/
+│   ├── auth-service-java/      # 认证服务（注册/登录/JWT）
+│   └── judge-service-python/   # 判题 API + Worker + 沙箱（sandbox_helper + sandbox_netblock）
+├── infra/
+│   ├── docker/                 # Docker Compose 编排
+│   └── sql/                    # 数据库初始化与种子数据
+├── scripts/                    # 启动/停止/诊断脚本
+├── FIX_LOG.md                  # 修复日志（28 轮）
+└── LICENSE                     # GPL-3.0
+```
 
-可运行：
+## 协议
 
-- `scripts\diagnose-env.bat`
-
-该脚本会检查并生成日志（位于 `scripts\logs\`）：
-
-- Docker / WSL 命令是否存在
-- Docker daemon 是否运行
-- 常用端口是否被占用（3000/8080/8081/8082/15672）
-- `docker compose` 是否可用
-
-### 系统状态页
-
-启动后访问：
-
-- `http://localhost:3000/system-status`
-
-用于查看 Gateway / Auth / Judge / RabbitMQ 的可达性与基础状态。
-
----
-
-## 关键 API（节选）
-
-### Auth
-- `POST /api/auth/register`
-- `POST /api/auth/login`
-
-### Problems
-- `GET /api/problems`
-- `GET /api/problems/:id`
-
-### Submissions
-- `POST /api/judge/submit`
-- `GET /api/submissions`
-- `GET /api/submissions/:id`
-
-### Leaderboard
-- `GET /api/leaderboard?period=all|weekly|monthly`
-
-### Admin - Problems
-- `POST /api/admin/problems`
-- `PUT /api/admin/problems/:id`
-- `DELETE /api/admin/problems/:id`
-
-### Admin - Test Cases
-- `GET /api/problems/:id/test-cases`
-- `POST /api/admin/problems/:id/test-cases`
-- `POST /api/admin/problems/:id/test-cases/bulk`
-- `PUT /api/admin/test-cases/:testCaseId`
-- `DELETE /api/admin/test-cases/:testCaseId`
-
----
-
-## 异步判题流程
-
-1. 前端提交代码到网关 `POST /api/judge/submit`
-2. 网关写 `submissions`（状态 PENDING）
-3. 网关把任务投递到 RabbitMQ 队列
-4. Judge Worker 消费任务、按 `test_cases` 判题
-5. Worker 回写结果到 `submissions`
-6. 前端轮询 `GET /api/submissions/:id` 展示最终结果
-
----
-
-## 数据表（核心）
-
-- `users`
-- `problems`
-- `test_cases`
-- `submissions`
-- `audit_logs`
-
----
-
-## 接下来可继续扩展
-
-- 接入真实代码沙箱（替换模拟执行）
-- 引入更细粒度权限（RBAC）
-- 增加 CI/CD 与自动化测试
-- 引入可观测性（Prometheus/Grafana/Tracing）
-- 引入 Elasticsearch 做题目检索
+[GPL-3.0](LICENSE) — Copyright (C) 2026 PolyCodeHub Team
