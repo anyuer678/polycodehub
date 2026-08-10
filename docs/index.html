@@ -23,71 +23,154 @@
     line-height: 1.7;
     min-height: 100vh;
   }
-  .wrap { max-width: 860px; margin: 0 auto; padding: 56px 24px 64px; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 24px 64px; }
+
+  .nav { display: flex; align-items: center; justify-content: space-between; padding: 12px 0 32px; }
+  .nav-brand { font-size: 15px; font-weight: 600; letter-spacing: -0.2px; }
+  .nav-brand .dot { color: var(--green); }
+
+  .hero { padding: 24px 0 40px; border-bottom: 1px solid var(--border-soft); }
   .badge { display: inline-block; font-size: 13px; color: var(--muted);
-    border: 1px solid var(--border); border-radius: 999px; padding: 2px 12px; margin-bottom: 20px; }
-  h1 { font-size: 40px; letter-spacing: -0.5px; margin-bottom: 8px; }
+    border: 1px solid var(--border); border-radius: 999px; padding: 2px 12px; margin-bottom: 16px; }
+  h1 { font-size: 44px; letter-spacing: -0.8px; margin-bottom: 10px; }
   h1 .dot { color: var(--green); }
-  .sub { color: var(--muted); font-size: 17px; margin-bottom: 36px; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 28px 0; }
+  .sub { color: var(--muted); font-size: 17px; max-width: 620px; }
+  .cta { margin-top: 24px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 8px 18px; border-radius: 6px; font-size: 14px;
+    text-decoration: none; border: 1px solid var(--border); }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #0860ca; }
+  .btn-ghost { color: var(--text); background: var(--card); }
+  .btn-ghost:hover { background: #f6f8fa; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px;
+    padding: 28px 0; border-bottom: 1px solid var(--border-soft); }
+  .stat { text-align: center; }
+  .stat-num { font-size: 30px; font-weight: 700; letter-spacing: -0.5px; color: var(--text); }
+  .stat-label { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+  h2 { font-size: 20px; margin: 40px 0 16px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
-  .card h3 { font-size: 15px; margin-bottom: 8px; color: var(--text); }
+  .card svg { margin-bottom: 12px; }
+  .card h3 { font-size: 15px; margin-bottom: 8px; }
   .card p { font-size: 14px; color: var(--muted); }
-  h2 { font-size: 20px; margin: 36px 0 12px; }
+
+  .pipeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+  .step { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; background: #fafbfc; }
+  .step-name { font-size: 14px; font-weight: 600; }
+  .step-desc { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .step-arrow { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 16px; }
+
   .stack { display: flex; flex-wrap: wrap; gap: 8px; }
   .chip { background: #f6f8fa; border: 1px solid var(--border); border-radius: 6px;
-    padding: 4px 12px; font-size: 13px; color: var(--text); }
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border-soft);
-    color: var(--muted); font-size: 13px; }
+    padding: 4px 12px; font-size: 13px; }
+  .chip b { color: var(--text); }
+
+  .quickstart { background: #fafbfc; border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px; margin-top: 8px; }
+  .quickstart p { font-size: 14.5px; color: var(--text); }
   code { background: #f6f8fa; border: 1px solid var(--border-soft); border-radius: 4px;
     padding: 1px 6px; font-size: 13px; }
+  .qs { margin-top: 12px; }
+  .qs-title { font-size: 12.5px; color: var(--muted); margin-bottom: 6px; font-weight: 600; }
+  pre { background: #f6f8fa; border: 1px solid var(--border-soft); border-radius: 8px;
+    padding: 12px 14px; font-size: 13px; overflow-x: auto; }
+  pre code { border: none; background: none; padding: 0; }
+
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border-soft);
+    color: var(--muted); font-size: 13px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <span class="badge">GPL-3.0 · 全栈 · 在线判题</span>
-  <h1>PolyCodeHub<span class="dot">.</span></h1>
-  <p class="sub">全栈在线判题（OJ）平台 — 题库练习 · 代码评测 · 比赛 · 每日一题 · 开发者社区</p>
+  <nav class="nav">
+    <span class="nav-brand">PolyCodeHub<span class="dot">.</span></span>
+    <a href="https://github.com/anyuer678/polycodehub" target="_blank" rel="noopener">GitHub →</a>
+  </nav>
 
+  <header class="hero">
+    <span class="badge">GPL-3.0 · 全栈 · 在线判题</span>
+    <h1>PolyCodeHub<span class="dot">.</span></h1>
+    <p class="sub">全栈在线判题（OJ）平台 — 题库练习 · 代码评测 · 实时比赛 · 每日一题 · 开发者社区，判题运行在进程级隔离沙箱中。</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/anyuer678/polycodehub" target="_blank" rel="noopener">查看源码</a>
+      <a class="btn btn-ghost" href="#quickstart">快速开始</a>
+    </div>
+  </header>
+
+  <section class="stats">
+    <div class="stat"><div class="stat-num">5</div><div class="stat-label">判题语言</div></div>
+    <div class="stat"><div class="stat-num">8</div><div class="stat-label">技术栈</div></div>
+    <div class="stat"><div class="stat-num">9</div><div class="stat-label">成就徽章</div></div>
+    <div class="stat"><div class="stat-num">24</div><div class="stat-label">位分享链接 Token</div></div>
+  </section>
+
+  <h2>核心能力</h2>
   <div class="cards">
     <div class="card">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0969da" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
       <h3>真实判题沙箱</h3>
       <p>Python / Node.js / C++ / C / Java 多语言评测，进程级隔离：setuid 降权 + seccomp 网络隔离 + 资源限制 + 环境清洗。</p>
     </div>
     <div class="card">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0969da" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
       <h3>竞赛与排行</h3>
       <p>比赛系统（AC 数 + 罚时实时榜单）、总榜/周榜/月榜、每日一题北京时间结算、成就徽章。</p>
     </div>
     <div class="card">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0969da" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       <h3>开发者社区</h3>
       <p>题解与评论、关注/粉丝、公开主页热力图与留言板、代码分享链接、站内信通知。</p>
     </div>
     <div class="card">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#0969da" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
       <h3>安全工程实践</h3>
       <p>JWT HttpOnly Cookie、鉴权缓存失效机制、限流 fail-closed、审计日志、凭据全环境变量化。</p>
     </div>
   </div>
 
-  <h2>技术栈</h2>
-  <div class="stack">
-    <span class="chip">Next.js + TypeScript</span>
-    <span class="chip">Express 网关</span>
-    <span class="chip">Java 21 / Spring Boot</span>
-    <span class="chip">Python 3.12 / FastAPI</span>
-    <span class="chip">PostgreSQL 16</span>
-    <span class="chip">Redis 7</span>
-    <span class="chip">RabbitMQ</span>
-    <span class="chip">Docker Compose</span>
+  <h2>判题链路</h2>
+  <div class="pipeline">
+    <div class="step"><div class="step-name">提交代码</div><div class="step-desc">Web / 自定义试运行</div></div>
+    <div class="step-arrow">→</div>
+    <div class="step"><div class="step-name">API 网关</div><div class="step-desc">鉴权 · 限流 · 校验</div></div>
+    <div class="step-arrow">→</div>
+    <div class="step"><div class="step-name">RabbitMQ</div><div class="step-desc">异步任务队列</div></div>
+    <div class="step-arrow">→</div>
+    <div class="step"><div class="step-name">判题沙箱</div><div class="step-desc">隔离运行 · 资源限制</div></div>
+    <div class="step-arrow">→</div>
+    <div class="step"><div class="step-name">结果回写</div><div class="step-desc">AC / WA / TLE / MLE</div></div>
   </div>
 
-  <h2>快速开始</h2>
-  <p style="color:var(--muted);font-size:15px;">
-    克隆仓库后执行 <code>scripts\start.ps1</code>（Windows）或
-    <code>docker compose -f infra/docker/docker-compose.yml up -d --build</code>，
-    访问 <code>http://localhost:3000</code>。
-  </p>
+  <h2>技术栈</h2>
+  <div class="stack">
+    <span class="chip"><b>前端</b> Next.js + TypeScript</span>
+    <span class="chip"><b>网关</b> Node.js + Express</span>
+    <span class="chip"><b>认证</b> Java 21 + Spring Boot</span>
+    <span class="chip"><b>判题</b> Python 3.12 + FastAPI</span>
+    <span class="chip"><b>数据库</b> PostgreSQL 16</span>
+    <span class="chip"><b>缓存</b> Redis 7</span>
+    <span class="chip"><b>队列</b> RabbitMQ</span>
+    <span class="chip"><b>编排</b> Docker Compose</span>
+  </div>
+
+  <h2 id="quickstart">快速开始</h2>
+  <div class="quickstart">
+    <p>Windows 一键启动：</p>
+    <div class="qs">
+      <div class="qs-title">PowerShell</div>
+      <pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start.ps1</code></pre>
+    </div>
+    <div class="qs">
+      <div class="qs-title">或手动 Docker Compose</div>
+      <pre><code>copy infra\docker\.env.example infra\docker\.env
+docker compose -f infra/docker/docker-compose.yml --env-file infra/docker/.env up -d --build</code></pre>
+    </div>
+    <p style="margin-top:14px;">启动后访问 <code>http://localhost:3000</code>（Web）与 <code>http://localhost:8080/health</code>（Gateway 健康检查）。</p>
+  </div>
 
   <footer>
     PolyCodeHub · <a href="https://github.com/anyuer678/polycodehub" target="_blank" rel="noopener">GitHub 仓库</a> ·
