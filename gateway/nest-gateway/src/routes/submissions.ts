@@ -52,7 +52,7 @@ router.get('/', requireAuth, asyncHandler(async (req, res) => {
 
   const result = await dbPool.query(
     `SELECT s.id, s.user_id, s.problem_id, p.title AS problem_title, s.language, s.status, s.runtime_ms, s.memory_kb,
-            s.error_message, s.failed_case_input, s.expected_output, s.actual_output, s.created_at
+            s.error_message, s.actual_output, s.created_at
      FROM submissions s
      JOIN problems p ON p.id = s.problem_id
      WHERE ${whereSql}
@@ -67,7 +67,7 @@ router.get('/share/:token', asyncHandler(async (req, res) => {
   const token = req.params.token;
   const result = await dbPool.query(
     `SELECT s.id, s.user_id, u.username, s.problem_id, p.title AS problem_title, s.language, s.status,
-            s.runtime_ms, s.memory_kb, s.error_message, s.failed_case_input, s.expected_output,
+            s.runtime_ms, s.memory_kb, s.error_message,
             s.actual_output, s.source_code, s.created_at
      FROM submissions s
      JOIN users u ON u.id = s.user_id
@@ -85,7 +85,7 @@ router.get('/:id', requireAuth, asyncHandler(async (req, res) => {
 
   const result = await dbPool.query(
     `SELECT s.id, s.user_id, s.problem_id, p.title AS problem_title, s.language, s.status, s.runtime_ms, s.memory_kb, s.error_message,
-            s.failed_case_input, s.expected_output, s.actual_output, s.created_at, s.updated_at, s.share_token
+            s.actual_output, s.created_at, s.updated_at, s.share_token
      FROM submissions s
      JOIN problems p ON p.id = s.problem_id
      WHERE s.id = $1 AND s.user_id = $2`,
