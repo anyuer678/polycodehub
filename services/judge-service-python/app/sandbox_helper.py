@@ -66,7 +66,8 @@ def main() -> int:
         except OSError as exc:
             # 静默失败会让 fork 炸弹防护失效（多 worker 并发时 sandbox 用户已有
             # 其他子进程，setrlimit 会因进程数超过新软限制而失败）——必须可见
-            os.write(2, f"__SB_WARN__=setrlimit NPROC failed: {exc}\n".encode())
+            os.write(2, f"__SB_ERROR__=setrlimit NPROC failed: {exc}\n".encode())
+            os._exit(125)
         try:
             os.execvp(cmd[0], cmd)
         except OSError as exc:
