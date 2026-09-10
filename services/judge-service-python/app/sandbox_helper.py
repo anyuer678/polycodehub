@@ -56,10 +56,11 @@ def main() -> int:
             os.write(2, f"__SB_ERROR__=setuid failed: {exc}\n".encode())
             os._exit(126)
         # 经 sandbox_netblock 设置 seccomp 网络隔离后再 exec 用户代码；
-        # 工具缺失时降级直接 exec 并警告（生产 Dockerfile 必须编译它）
-        cmd = [NETBLOCK_BIN, *args] if os.path.exists(NETBLOCK_BIN) else args
-        if cmd is args:
-            os.write(2, b"__SB_WARN__=sandbox_netblock missing, network NOT isolated\n")
+        # 工具缺失时拒绝执行（fail-closed），防止用户代码绕过网络限制外泄
+        if not os.path.isfile(NETBLOCK_BIN) or not os.access(NETBLOCK_BIN, os.X_OK):
+            os.write(2, b"__SB_ERROR__=sandbox_netblock missing or not executable; refuse to judge\n")
+            os._exit(125)
+        cmd = [NETBLOCK_BIN, *args]
         try:
             resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
         except OSError as exc:
