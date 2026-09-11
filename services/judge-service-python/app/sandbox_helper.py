@@ -11,6 +11,13 @@
 fork 模式：父进程（root）在子进程结束后用 wait4 取【子进程自身】的 rusage，
 将物理内存峰值以 `__SB_RUSAGE__=<kb>` 一行写入 stderr，供 engine.py 解析——
 避免 worker 进程级 RUSAGE_CHILDREN 累计峰值导致的永久性假 MLE。
+
+安全层次：
+  1. setuid 降权到 sandbox (uid 1002) + 清空补充组
+  2. seccomp 纵深防御（sandbox_netblock）：阻止网络/调试/挂载/reboot/io_uring
+  3. rlimit 资源限制（内存/CPU/文件大小/进程数/文件描述符）
+  4. 环境变量清洗（仅保留 PATH/HOME/LANG/TMPDIR）
+  5. site-packages chmod 700（sandbox 用户不可读）
 """
 import os
 import resource
@@ -20,7 +27,7 @@ SANDBOX_UID = 1002
 SANDBOX_GID = 1001
 
 # 网络隔离工具：sandbox_netblock（C + libseccomp，Dockerfile 编译到 /usr/local/bin）。
-# 它在 exec 用户代码前设置 seccomp filter（禁 IPv4/IPv6 socket）。
+# 它在 exec 用户代码前设置 seccomp filter：阻止网络/调试/挂载/reboot/io_uring。
 NETBLOCK_BIN = "/usr/local/bin/sandbox_netblock"
 
 
@@ -55,8 +62,8 @@ def main() -> int:
         except OSError as exc:
             os.write(2, f"__SB_ERROR__=setuid failed: {exc}\n".encode())
             os._exit(126)
-        # 经 sandbox_netblock 设置 seccomp 网络隔离后再 exec 用户代码；
-        # 工具缺失时拒绝执行（fail-closed），防止用户代码绕过网络限制外泄
+        # 经 sandbox_netblock 设置 seccomp 安全隔离后再 exec 用户代码；
+        # 工具缺失时拒绝执行（fail-closed），防止用户代码绕过安全限制
         if not os.path.isfile(NETBLOCK_BIN) or not os.access(NETBLOCK_BIN, os.X_OK):
             os.write(2, b"__SB_ERROR__=sandbox_netblock missing or not executable; refuse to judge\n")
             os._exit(125)
