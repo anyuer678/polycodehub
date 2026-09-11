@@ -26,8 +26,10 @@ from .repository import TestCase, Verdict, fetch_test_cases
 # - 资源限制：RLIMIT_AS（虚拟内存）/RLIMIT_CPU/RLIMIT_FSIZE/RLIMIT_NPROC/RLIMIT_NOFILE，
 #   超内存由 ru_maxrss 事后判定 MLE。
 # - 输出有界读取：stdout/stderr 各自最多保留 MAX_OUTPUT_CHARS，防止恶意程序刷爆 worker 内存。
-# 仍存在的残余风险：用户代码可发起本地网络连接（无 --network=none）。生产加固建议：
-# 用独立判题容器 + 子容器执行（--network=none --pids-limit），或 seccomp profile。
+# - seccomp 纵深防御（sandbox_netblock）：阻止 ptrace（调试注入）、mount/umount2（文件系统篡改）、
+#   reboot/kexec_load（系统重启）、io_uring_setup（内核攻击面）、AF_INET/AF_INET6/AF_NETLINK（网络）。
+# 仍存在的残余风险：用户代码可发起 Unix domain socket 本地连接（AF_UNIX 保留用于进程间通信）。
+# 生产加固建议：用独立判题容器 + 子容器执行（--network=none --pids-limit），或 Kubernetes gVisor。
 
 EMPTY_SOURCE = "empty source code"
 TLE_MSG = "time limit exceeded"
