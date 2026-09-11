@@ -10,7 +10,12 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt && \
     chmod 700 /usr/local/lib/python3.12/site-packages
-# 沙箱网络隔离工具：seccomp 禁 IPv4/IPv6 socket（sandbox_helper 降权后经它 exec 用户代码）
+# 沙箱安全隔离工具：seccomp 纵深防御
+# - 网络：阻止 AF_INET/AF_INET6/AF_NETLINK socket
+# - 调试：阻止 ptrace（防止调试器附加/代码注入）
+# - 文件系统：阻止 mount/umount2（防止容器逃逸）
+# - 系统：阻止 reboot/kexec_load（防止系统重启）
+# - 内核攻击面：阻止 io_uring_setup（已知提权 CVE）
 COPY sandbox_netblock.c ./
 RUN gcc -O2 -o /usr/local/bin/sandbox_netblock sandbox_netblock.c -lseccomp && rm sandbox_netblock.c
 COPY app ./app
