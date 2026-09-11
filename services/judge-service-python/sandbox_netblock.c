@@ -9,7 +9,9 @@
  *   调试：ptrace（防止调试器附加 / 代码注入 / 进程内存读取）
  *   文件系统：mount / umount2（防止容器逃逸 / 文件系统篡改）
  *   系统：reboot / kexec_load（防止系统重启 / 内核替换）
- *   内核攻击面：io_uring_setup（已知有多个内核提权漏洞）
+ *   内核攻击面：io_uring_setup、bpf、userfaultfd（已知提权 CVE）
+ *   进程间内存：process_vm_readv / process_vm_writev（防止跨进程内存读写）
+ *   性能监控：perf_event_open（防止侧信道攻击）
  *   权限：acct / ioperm / iopl（防止进程记账和端口 I/O）
  *   交换：swapon / swapoff（防止交换分区操作）
  *
@@ -85,6 +87,19 @@ int main(int argc, char *argv[]) {
     /* ===== 内核攻击面缩减 ===== */
     /* 阻止 io_uring：已知有多个内核提权 CVE（CVE-2023-xxxx 系列） */
     ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(io_uring_setup));
+    /* 阻止 bpf：防止内核可编程（BPF 提权 CVE 如 CVE-2021-3490） */
+    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(bpf));
+    /* 阻止 userfaultfd：已知内核提权向量（CVE-2019-11599 等） */
+    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(userfaultfd));
+
+    /* ===== 进程间内存隔离 ===== */
+    /* 阻止 process_vm_readv/writev：防止跨进程内存读写（配合 ptrace 封锁） */
+    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(process_vm_readv));
+    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(process_vm_writev));
+
+    /* ===== 侧信道防护 ===== */
+    /* 阻止 perf_event_open：防止 CPU 性能监控（侧信道攻击向量） */
+    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(perf_event_open));
 
     /* ===== 权限限制 ===== */
     /* 阻止 acct（进程记账）、ioperm/iopl（端口 I/O） */
