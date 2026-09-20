@@ -4,14 +4,16 @@
 
 | ID | 历史问题 | 回归检查 | 建议自动化 | 状态 |
 |---|---|---|---|---|
-| R-01 | CORS 过宽 `*` | gateway CORS 仅允许配置的 origin；默认非 `*` | 配置单测 / 启动校验 | 待补测 |
+| R-01 | CORS 过宽 `*` | gateway CORS 仅允许配置的 origin；默认非 `*` | `tests/test_fixlog_regressions.py::test_r01_*` | **源码回归已加（CI）** |
 | R-02 | 硬编码密码 | 源码与 compose 无明文生产口令；`.env.example` 仅占位 | secret scan CI | 扫描已做（公开仓干净） |
-| R-03 | 隐藏用例泄露 | 提交 API 不返回未公开测试用例内容 | API 集成测 | 待补测 |
-| R-04 | JWT 占位 secret | 启动拒绝长度不足或 example secret | auth 启动测试 | 文档已要求；待测 |
-| R-05 | auth 被绕过直连 | prod compose 不 publish auth；文档强调网关入口 | compose 审查 | **已加** `docker-compose.prod.yml` |
-| R-06 | 中间件宿主暴露 | prod 不 publish 5432/6379/5672/15672 | compose 审查 | **已加** prod compose |
-| R-07 | 判题沙箱逃逸类 | 见 `tests/sandbox_adversarial/` | 沙箱对抗 pytest | 骨架已加，需在 judge 环境跑 |
+| R-03 | 隐藏用例泄露 | 公开 problems 路由仅 `is_sample=TRUE` | `test_r03_hidden_testcases_not_public_query` | **源码回归已加**；API 集成测仍待 |
+| R-04 | JWT 占位 secret | JwtService 拒绝空/`replace-with`/长度&lt;32 | `test_r04_jwt_secret_validation_in_code` | **源码回归已加**；auth 启动集成测待 |
+| R-05 | auth 被绕过直连 | prod compose 不 publish auth | `test_r05_r06_prod_compose_*` | **已加** prod compose + 源码回归 |
+| R-06 | 中间件宿主暴露 | prod 不 publish 5432/6379/5672 | 同上 | **已加** |
+| R-07 | 判题沙箱逃逸类 | `tests/sandbox_adversarial/` + helper fail-closed | sandbox-adversarial CI（passed≥4） | **CI 6 PASSED** + 源码回归 |
 | R-08 | 破坏性命令/路径 | worker 仅在沙箱工作目录写 | worker 单测 | 待补 |
+
+CI job：`fixlog-regressions`（`.github/workflows/ci.yml`）。
 
 ## 如何用
 
