@@ -11,6 +11,9 @@ on:
       - ".github/workflows/sandbox-adversarial.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   adversarial:
     runs-on: ubuntu-latest
@@ -22,21 +25,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Install seccomp toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libseccomp-dev gcc
+
+      - name: Create sandbox user (uid 1002 / gid 1001)
+        run: |
+          sudo groupadd -g 1001 sandbox || true
+          sudo useradd -u 1002 -g 1001 -M -s /usr/sbin/nologin sandbox || true
+          id sandbox || true
+
+      - name: Compile sandbox_netblock
+        run: |
+          sudo gcc -O2 -o /usr/local/bin/sandbox_netblock sandbox_netblock.c -lseccomp
+          sudo chmod 755 /usr/local/bin/sandbox_netblock
+          test -x /usr/local/bin/sandbox_netblock
+
       - name: Install pytest
         run: pip install pytest
-      - name: Compile sandbox_netblock (best-effort)
-        run: |
-          if command -v gcc >/dev/null && ldconfig -p 2>/dev/null | grep -q seccomp || dpkg -l | grep -q libseccomp; then
-            sudo apt-get update && sudo apt-get install -y libseccomp-dev || true
-            gcc -O2 -o /tmp/sandbox_netblock sandbox_netblock.c -lseccomp || echo "netblock compile failed (ok for metadata tests)"
-          else
-            echo "libseccomp not available"
-          fi
-      - name: Run adversarial + unit metadata tests
+
+      - name: Run adversarial suite as root
         env:
           SANDBOX_HELPER: ${{ github.workspace }}/services/judge-service-python/app/sandbox_helper.py
-          SANDBOX_NETBLOCK: /tmp/sandbox_netblock
+          SANDBOX_NETBLOCK: /usr/local/bin/sandbox_netblock
+          SB_SANDBOX_UID: "1002"
+          SB_SANDBOX_GID: "1001"
         run: |
-          python -m pytest tests/sandbox_adversarial tests -q --tb=short || true
-          # 至少保证元数据测试（helper/netblock 源码存在）必过
-          python -m pytest tests/sandbox_adversarial/test_blocked.py::test_netblock_binary_missing_is_documented -q
+          sudo -E env "PATH=$PATH" python -m pytest tests/sandbox_adversarial -q --tb=short
