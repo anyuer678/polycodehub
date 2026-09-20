@@ -18,7 +18,12 @@ from pathlib import Path
 
 import pytest
 
-SANDBOX_HELPER = os.environ.get("SANDBOX_HELPER", "")
+_DEFAULT_HELPER = str(
+    Path(__file__).resolve().parents[2] / "app" / "sandbox_helper.py"
+)
+SANDBOX_HELPER = os.environ.get("SANDBOX_HELPER", "") or (
+    _DEFAULT_HELPER if Path(_DEFAULT_HELPER).exists() else ""
+)
 SANDBOX_NETBLOCK = os.environ.get("SANDBOX_NETBLOCK", "")
 
 
