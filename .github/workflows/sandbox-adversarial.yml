@@ -53,4 +53,17 @@ jobs:
           SB_SANDBOX_UID: "1002"
           SB_SANDBOX_GID: "1001"
         run: |
-          sudo -E env "PATH=$PATH" python -m pytest tests/sandbox_adversarial -q --tb=short
+          set -euo pipefail
+          sudo -E env "PATH=$PATH" python -m pytest tests/sandbox_adversarial -q --tb=short -rA | tee /tmp/sb_pytest.txt
+          # 防假绿：必须有明确的 passed 计数，且 fail-closed/文档测试至少其一执行
+          if ! grep -E '[1-9][0-9]* passed' /tmp/sb_pytest.txt; then
+            echo "HARD FAIL: no pytest passed summary"
+            exit 1
+          fi
+          # 至少 4 个 passed（含元数据 + fail-closed 等），避免 0 用例也算过
+          PASSED=$(grep -oE '[0-9]+ passed' /tmp/sb_pytest.txt | head -1 | awk '{print $1}')
+          echo "PASSED_COUNT=${PASSED}"
+          if [ "${PASSED:-0}" -lt 4 ]; then
+            echo "HARD FAIL: expected >=4 passed, got ${PASSED}"
+            exit 1
+          fi
