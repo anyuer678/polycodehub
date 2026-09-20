@@ -34,10 +34,21 @@
 #define EXIT_SECCOMP_FAIL 125
 #define EXIT_EXEC_FAIL 127
 
-/* 添加单条 seccomp 规则的辅助宏：失败则打印并退出 */
-#define ADD_RULE_OR_DIE(ctx, act, call, ...) \
+/* 添加 seccomp 规则：失败则打印并退出。
+ * libseccomp 原型：seccomp_rule_add(ctx, action, syscall, arg_cnt, ...)
+ * arg_cnt=0 表示无参数过滤；带过滤时传入 arg_cnt + SCMP_A* 宏。
+ */
+#define ADD_RULE0(ctx, act, call) \
     do { \
-        if (seccomp_rule_add(ctx, act, call, ##__VA_ARGS__) != 0) { \
+        if (seccomp_rule_add(ctx, act, call, 0) != 0) { \
+            perror("sandbox_netblock: rule " #call); \
+            return EXIT_SECCOMP_FAIL; \
+        } \
+    } while (0)
+
+#define ADD_RULE_N(ctx, act, call, arg_cnt, ...) \
+    do { \
+        if (seccomp_rule_add(ctx, act, call, arg_cnt, __VA_ARGS__) != 0) { \
             perror("sandbox_netblock: rule " #call); \
             return EXIT_SECCOMP_FAIL; \
         } \
@@ -62,55 +73,55 @@ int main(int argc, char *argv[]) {
 
     /* ===== 网络隔离 ===== */
     /* 阻止 IPv4/IPv6 socket（含 loopback），判题代码无法连接任何网络 */
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
-                    SCMP_A0(SCMP_CMP_EQ, AF_INET));
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
-                    SCMP_A0(SCMP_CMP_EQ, AF_INET6));
+    ADD_RULE_N(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
+               SCMP_A0(SCMP_CMP_EQ, AF_INET));
+    ADD_RULE_N(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
+               SCMP_A0(SCMP_CMP_EQ, AF_INET6));
     /* 阻止 AF_NETLINK：INET_DIAG 可枚举本机所有监听端口（内网拓扑侦察） */
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
-                    SCMP_A0(SCMP_CMP_EQ, AF_NETLINK));
+    ADD_RULE_N(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
+               SCMP_A0(SCMP_CMP_EQ, AF_NETLINK));
 
     /* ===== 调试防护 ===== */
     /* 阻止 ptrace：防止调试器附加、代码注入、进程内存读取 */
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(ptrace));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(ptrace));
 
     /* ===== 文件系统防护 ===== */
     /* 阻止 mount/umount2：防止容器逃逸、文件系统挂载篡改 */
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(mount));
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(umount2));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(mount));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(umount2));
 
     /* ===== 系统稳定性 ===== */
     /* 阻止 reboot/kexec_load：防止系统重启、内核替换 */
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(reboot));
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(kexec_load));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(reboot));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(kexec_load));
 
     /* ===== 内核攻击面缩减 ===== */
     /* 阻止 io_uring：已知有多个内核提权 CVE（CVE-2023-xxxx 系列） */
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(io_uring_setup));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(io_uring_setup));
     /* 阻止 bpf：防止内核可编程（BPF 提权 CVE 如 CVE-2021-3490） */
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(bpf));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(bpf));
     /* 阻止 userfaultfd：已知内核提权向量（CVE-2019-11599 等） */
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(userfaultfd));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(userfaultfd));
 
     /* ===== 进程间内存隔离 ===== */
     /* 阻止 process_vm_readv/writev：防止跨进程内存读写（配合 ptrace 封锁） */
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(process_vm_readv));
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(process_vm_writev));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(process_vm_readv));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(process_vm_writev));
 
     /* ===== 侧信道防护 ===== */
     /* 阻止 perf_event_open：防止 CPU 性能监控（侧信道攻击向量） */
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(perf_event_open));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(perf_event_open));
 
     /* ===== 权限限制 ===== */
     /* 阻止 acct（进程记账）、ioperm/iopl（端口 I/O） */
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(acct));
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(ioperm));
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(iopl));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(acct));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(ioperm));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(iopl));
 
     /* ===== 交换分区 ===== */
     /* 阻止 swapon/swapoff：防止交换分区操作 */
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(swapon));
-    ADD_RULE_OR_DIE(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(swapoff));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(swapon));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(swapoff));
 
     if (seccomp_load(ctx) != 0) {
         perror("sandbox_netblock: seccomp_load");
