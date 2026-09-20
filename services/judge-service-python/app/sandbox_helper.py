@@ -23,12 +23,13 @@ import os
 import resource
 import sys
 
-SANDBOX_UID = 1002
-SANDBOX_GID = 1001
+# 允许 CI/本地用环境变量覆盖 UID/GID 与 netblock 路径（默认与生产一致）
+SANDBOX_UID = int(os.environ.get("SB_SANDBOX_UID", "1002"))
+SANDBOX_GID = int(os.environ.get("SB_SANDBOX_GID", "1001"))
 
 # 网络隔离工具：sandbox_netblock（C + libseccomp，Dockerfile 编译到 /usr/local/bin）。
 # 它在 exec 用户代码前设置 seccomp filter：阻止网络/调试/挂载/reboot/io_uring。
-NETBLOCK_BIN = "/usr/local/bin/sandbox_netblock"
+NETBLOCK_BIN = os.environ.get("SANDBOX_NETBLOCK", "/usr/local/bin/sandbox_netblock")
 
 
 def main() -> int:
