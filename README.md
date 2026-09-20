@@ -138,3 +138,10 @@ polycodehub/
 ## 协议
 
 [GPL-3.0](LICENSE) — Copyright (C) 2026 PolyCodeHub Team
+
+
+## 部署模式
+
+- 演示：`infra/docker/docker-compose.yml`（可暴露调试端口）
+- **生产向基线**：`infra/docker/docker-compose.prod.yml` — DB/Redis/RabbitMQ/Auth 不对宿主 publish，Web/Gateway 仅绑定 127.0.0.1
+- 说明见 [infra/docker/README-prod.md](infra/docker/README-prod.md)
