@@ -11,7 +11,7 @@
 | R-05 | auth 被绕过直连 | prod compose 不 publish auth | `test_r05_r06_prod_compose_*` | **已加** prod compose + 源码回归 |
 | R-06 | 中间件宿主暴露 | prod 不 publish 5432/6379/5672 | 同上 | **已加** |
 | R-07 | 判题沙箱逃逸类 | `tests/sandbox_adversarial/` + helper fail-closed | sandbox-adversarial CI（passed≥4） | **CI 6 PASSED** + 源码回归 |
-| R-08 | 破坏性命令/路径 | worker 仅在沙箱工作目录写 | worker 单测 | 待补 |
+| R-08 | 破坏性命令/路径 | worker 仅在沙箱工作目录写 | `tests/test_engine_workdir.py`（prefix/0700/env 无密钥/cwd=/tmp） | **单元回归已加** |
 
 CI job：`fixlog-regressions`（`.github/workflows/ci.yml`）。
 
