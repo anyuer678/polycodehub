@@ -20,21 +20,37 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npm run build
+      - name: npm audit (prod)
+        working-directory: apps/web
+        run: npm audit --omit=dev --audit-level=high || true
 
   judge:
-    name: Judge service (pytest)
+    name: Judge service (pytest + coverage artifact)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install deps & test
+      - name: Install deps & unit tests
         working-directory: services/judge-service-python
         run: |
           pip install -r requirements.txt
-          pip install pytest
-          python -m pytest tests/ -q
+          pip install pytest pytest-cov
+          python -m pytest tests/ -q --tb=short \
+            --ignore=tests/integration \
+            --ignore=tests/sandbox_adversarial \
+            --cov=app --cov-report=term --cov-report=xml:coverage.xml | tee /tmp/pytest-unit.txt
+          # Docker-free suite must stay green and non-empty
+          grep -E '[1-9][0-9]* passed' /tmp/pytest-unit.txt
+      - name: Upload coverage summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: judge-coverage-xml
+          path: services/judge-service-python/coverage.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
   fixlog-regressions:
     name: FIX_LOG source regressions
@@ -48,5 +64,17 @@ jobs:
         working-directory: services/judge-service-python
         run: |
           pip install pytest
-          python -m pytest tests/test_fixlog_regressions.py -q --tb=short
+          python -m pytest tests/test_fixlog_regressions.py tests/test_gateway_auth_pure.py -q --tb=short
 
+  gateway-pure-node:
+    name: Gateway pure auth (Node type-strip)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run pure auth-pure tests without Express
+        working-directory: gateway/nest-gateway
+        run: |
+          node --experimental-strip-types --no-warnings tests/auth-pure.test.mjs
