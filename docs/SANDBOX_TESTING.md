@@ -42,3 +42,8 @@ sudo bash scripts/setup_sandbox_ci.sh
 ## 与 engine
 
 生产链路：`engine.py` → `sandbox_helper.py`（rlimit+setuid+清洗）→ `sandbox_netblock`（seccomp）→ 用户代码。对抗测试必须调用 **同一 helper**。
+
+
+## 生产镜像
+
+见 [JUDGE_PRODUCTION_IMAGE.md](JUDGE_PRODUCTION_IMAGE.md)（容器能力、tmpfs、自检、非目标）。
