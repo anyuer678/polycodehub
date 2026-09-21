@@ -33,7 +33,15 @@ def test_public_testcases_sql_only_samples():
     # 不得在公开查询里去掉 is_sample 过滤
     assert "FROM test_cases" in block
     # 若 SELECT 了 test_cases 却没有 is_sample 条件则失败
-    selects = re.findall(r"SELECT[\s\S]{0,400}?FROM test_cases[\s\S]{0,200}?", block, re.I)
+    selects = re.findall(
+        r"SELECT[\s\S]{0,400}?FROM test_cases[\s\S]{0,300}?(?:ORDER BY|ok\(|`)",
+        block,
+        re.I,
+    )
+    if not selects:
+        # fallback: whole route block must contain is_sample filter
+        assert re.search(r"is_sample\s*=\s*TRUE", block, re.I), block
+        return
     for s in selects:
         assert re.search(r"is_sample\s*=\s*TRUE", s, re.I), s
 
