@@ -36,13 +36,21 @@ jobs:
         working-directory: services/judge-service-python
         run: |
           pip install -r requirements.txt
-          pip install pytest pytest-cov
+          pip install pytest
+          set -o pipefail
           python -m pytest tests/ -q --tb=short \
             --ignore=tests/integration \
-            --ignore=tests/sandbox_adversarial \
-            --cov=app --cov-report=term --cov-report=xml:coverage.xml | tee /tmp/pytest-unit.txt
-          # Docker-free suite must stay green and non-empty
+            --ignore=tests/sandbox_adversarial | tee /tmp/pytest-unit.txt
           grep -E '[1-9][0-9]* passed' /tmp/pytest-unit.txt
+      - name: Coverage artifact (non-blocking)
+        working-directory: services/judge-service-python
+        continue-on-error: true
+        run: |
+          pip install pytest-cov
+          python -m pytest tests/ -q --tb=line \
+            --ignore=tests/integration \
+            --ignore=tests/sandbox_adversarial \
+            --cov=app --cov-report=xml:coverage.xml || true
       - name: Upload coverage summary artifact
         if: always()
         uses: actions/upload-artifact@v4
