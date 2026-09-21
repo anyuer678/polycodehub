@@ -31,17 +31,77 @@ SANDBOX_GID = int(os.environ.get("SB_SANDBOX_GID", "1001"))
 # 它在 exec 用户代码前设置 seccomp filter：阻止网络/调试/挂载/reboot/io_uring。
 NETBLOCK_BIN = os.environ.get("SANDBOX_NETBLOCK", "/usr/local/bin/sandbox_netblock")
 
+# 仅保留这些键给用户代码；绝不透传 DB/Redis/AMQP/JWT 等凭据。
+ALLOWED_SANDBOX_ENV_KEYS = frozenset({"PATH", "HOME", "LANG", "TMPDIR"})
+
+DEFAULT_LIMITS = {
+    "SB_MEM_KB": 1048576,
+    "SB_CPU_S": 2,
+    "SB_FSIZE_KB": 65536,
+    "SB_NPROC": 1,
+    "SB_NOFILE": 64,
+}
+
+
+def resolve_sandbox_ids(environ: dict | None = None) -> tuple[int, int]:
+    """读取 uid/gid（可用 SB_SANDBOX_UID/GID 覆盖，默认 1002/1001）。"""
+    env = os.environ if environ is None else environ
+    uid = int(env.get("SB_SANDBOX_UID", "1002"))
+    gid = int(env.get("SB_SANDBOX_GID", "1001"))
+    return uid, gid
+
+
+def resolve_netblock(environ: dict | None = None) -> str:
+    env = os.environ if environ is None else environ
+    return env.get("SANDBOX_NETBLOCK", "/usr/local/bin/sandbox_netblock")
+
+
+def parse_sb_limits(environ: dict | None = None) -> dict[str, int]:
+    """解析 SB_* 资源限制；缺省用 DEFAULT_LIMITS，非法值抛 ValueError。"""
+    env = os.environ if environ is None else environ
+    out: dict[str, int] = {}
+    for key, default in DEFAULT_LIMITS.items():
+        raw = env.get(key)
+        if raw is None or raw == "":
+            out[key] = default
+            continue
+        try:
+            out[key] = int(raw)
+        except ValueError as exc:
+            raise ValueError(f"invalid {key}: {raw!r}") from exc
+        if out[key] < 0:
+            raise ValueError(f"negative {key}: {raw!r}")
+    return out
+
+
+def netblock_ready(path: str) -> bool:
+    """netblock 必须是存在的可执行文件，否则 fail-closed。"""
+    return bool(path) and os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def scrubbed_sandbox_env(base: dict | None = None) -> dict[str, str]:
+    """环境清洗：只保留 ALLOWED_SANDBOX_ENV_KEYS 中的白名单键。"""
+    src = base if base is not None else {}
+    cleaned: dict[str, str] = {}
+    for key in ALLOWED_SANDBOX_ENV_KEYS:
+        if key in src:
+            cleaned[key] = str(src[key])
+    return cleaned
+
 
 def main() -> int:
     args = sys.argv[1:]
     if not args:
         return 2
 
-    mem_kb = int(os.environ.get("SB_MEM_KB", "1048576"))
-    cpu_s = int(os.environ.get("SB_CPU_S", "2"))
-    fsize_kb = int(os.environ.get("SB_FSIZE_KB", "65536"))
-    nproc = int(os.environ.get("SB_NPROC", "1"))
-    nofile = int(os.environ.get("SB_NOFILE", "64"))
+    limits = parse_sb_limits()
+    mem_kb = limits["SB_MEM_KB"]
+    cpu_s = limits["SB_CPU_S"]
+    fsize_kb = limits["SB_FSIZE_KB"]
+    nproc = limits["SB_NPROC"]
+    nofile = limits["SB_NOFILE"]
+    SANDBOX_UID, SANDBOX_GID = resolve_sandbox_ids()
+    netblock_bin = resolve_netblock()
 
     # root 阶段设置硬限制（降权后无法再放宽）
     resource.setrlimit(resource.RLIMIT_AS, (mem_kb * 1024, mem_kb * 1024))
@@ -65,10 +125,10 @@ def main() -> int:
             os._exit(126)
         # 经 sandbox_netblock 设置 seccomp 安全隔离后再 exec 用户代码；
         # 工具缺失时拒绝执行（fail-closed），防止用户代码绕过安全限制
-        if not os.path.isfile(NETBLOCK_BIN) or not os.access(NETBLOCK_BIN, os.X_OK):
+        if not netblock_ready(netblock_bin):
             os.write(2, b"__SB_ERROR__=sandbox_netblock missing or not executable; refuse to judge\n")
             os._exit(125)
-        cmd = [NETBLOCK_BIN, *args]
+        cmd = [netblock_bin, *args]
         try:
             resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
         except OSError as exc:

@@ -5,23 +5,20 @@ import { dbPool } from '../db';
 import { config } from '../config';
 import { ROLE_ADMIN, ROLE_USER, REDIS_KEYS, AUTH_COOKIE } from '../constants';
 import { HttpError } from './http';
+import {
+  type AuthUser,
+  type BanInfo,
+  banKey,
+  computeBanTtl,
+  extractToken,
+  getJwtExp,
+  isAdmin as isAdminPure,
+  isBanActive,
+} from './auth-pure';
 
-export type AuthUser = {
-  id: number;
-  email: string;
-  username: string;
-  role?: string;
-  /** 缓存写入时的用户版本号，用于失效检测 */
-  ver?: number;
-  /** JWT 过期时间戳（秒），缓存命中时校验，防止过期 token 在缓存窗口内继续放行 */
-  exp?: number | null;
-};
-
-/** 结构化封禁信息：返回给前端用于透明化展示 */
-export type BanInfo = {
-  ban_reason: string | null;
-  banned_until: string | null;
-};
+export type { AuthUser, BanInfo };
+// Pure helpers live in auth-pure.ts (unit-testable without Express/Redis/DB).
+export { banKey, computeBanTtl, getJwtExp, isBanActive };
 
 /** 账号被封禁时抛出的错误，detail 携带 reason/until 供前端展示 */
 export class AccountBannedError extends HttpError {
@@ -45,38 +42,15 @@ declare global {
 /** 从 Authorization 头或 httpOnly Cookie 中提取 token。
  *  Cookie 优先（httpOnly 防 XSS），Authorization 头保留以兼容旧客户端。 */
 export function getBearerToken(req: Request, authorization?: string): string | null {
-  // 1. httpOnly Cookie
-  const cookieToken = req.cookies?.[AUTH_COOKIE];
-  if (cookieToken && typeof cookieToken === 'string') return cookieToken;
-  // 2. Authorization: Bearer <token>
-  if (!authorization) return null;
-  const [scheme, token] = authorization.split(' ');
-  if (scheme !== 'Bearer' || !token) return null;
-  return token;
+  return extractToken(
+    req.cookies as Record<string, unknown> | undefined,
+    authorization ?? req.headers.authorization,
+    AUTH_COOKIE
+  );
 }
 
 export function isAdmin(user: AuthUser): boolean {
-  return user.role === ROLE_ADMIN;
-}
-
-export function banKey(userId: number): string {
-  return `auth:ban:${userId}`;
-}
-
-/** 计算 banKey 的 Redis TTL（秒）：与 banned_until 对齐，到期自动解除拦截。
- *  返回 null 表示永久封禁；返回 0 表示 banned_until 已过期。 */
-export function computeBanTtl(banned_until: string | null): number | null {
-  if (!banned_until) return null;
-  const ms = new Date(banned_until).getTime() - Date.now();
-  if (ms <= 0) return 0;
-  return Math.ceil(ms / 1000);
-}
-
-/** 判断 banned 状态是否实际生效：banned=true 且未过期 */
-export function isBanActive(banned: boolean, banned_until: string | null): boolean {
-  if (!banned) return false;
-  if (!banned_until) return true; // 永久封禁
-  return new Date(banned_until).getTime() > Date.now();
+  return isAdminPure(user, ROLE_ADMIN);
 }
 
 /** 删除某用户的所有 auth 缓存：admin 更新用户时调用。
@@ -87,19 +61,6 @@ export async function invalidateUserAuthCache(userId: number): Promise<void> {
     await redis.incr(REDIS_KEYS.authUserVersion(userId));
   } catch {
     // redis 不可用时非致命：缓存 TTL=300s 内自然过期
-  }
-}
-
-/** 解析 JWT payload 的 exp（秒）。不验签——仅用于缓存命中时的过期判断，
- *  真伪校验仍由 auth-service 全量路径负责。解析失败返回 null。 */
-export function getJwtExp(token: string): number | null {
-  try {
-    const payload = token.split('.')[1];
-    if (!payload) return null;
-    const json = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { exp?: unknown };
-    return typeof json?.exp === 'number' && Number.isFinite(json.exp) ? json.exp : null;
-  } catch {
-    return null;
   }
 }
 

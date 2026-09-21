@@ -10,8 +10,10 @@
 | R-04 | JWT 占位 secret | JwtService 拒绝空/`replace-with`/长度&lt;32 | `test_r04_jwt_secret_validation_in_code` | **源码回归已加**；auth 启动集成测待 |
 | R-05 | auth 被绕过直连 | prod compose 不 publish auth | `test_r05_r06_prod_compose_*` | **已加** prod compose + 源码回归 |
 | R-06 | 中间件宿主暴露 | prod 不 publish 5432/6379/5672 | 同上 | **已加** |
-| R-07 | 判题沙箱逃逸类 | `tests/sandbox_adversarial/` + helper fail-closed | sandbox-adversarial CI（passed≥4） | **CI 6 PASSED** + 源码回归 |
+| R-07 | 判题沙箱逃逸类 | `tests/sandbox_adversarial/` + helper fail-closed | sandbox-adversarial CI（passed≥4） | **CI 6 PASSED** + 源码回归 + `test_sandbox_helper_unit.py`（无 root mock） |
 | R-08 | 破坏性命令/路径 | worker 仅在沙箱工作目录写 | `tests/test_engine_workdir.py`（prefix/0700/env 无密钥/cwd=/tmp） | **单元回归已加** |
+| R-09 | 网关鉴权纯逻辑 | ban TTL / JWT exp / cookie 优先 | `test_gateway_auth_pure.py` + `auth-pure.test.mjs` | **CI 已挂**（无 Express） |
+| R-10 | engine 判题契约 | 空源/未知语言 CE、WA/AC、SB_* 注入 | `test_engine_pure.py` | **单元回归已加** |
 
 CI job：`fixlog-regressions`（`.github/workflows/ci.yml`）。
 
