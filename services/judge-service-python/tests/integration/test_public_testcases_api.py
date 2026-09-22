@@ -22,6 +22,21 @@ GATEWAY = os.environ.get("GATEWAY_URL", "").rstrip("/")
 PROBLEM_ID = os.environ.get("TEST_PROBLEM_ID", "1")
 
 
+def _items(payload):
+    """Normalize public test-case list from bare array or common envelopes."""
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    if isinstance(payload.get("items"), list):
+        return payload["items"]
+    data = payload.get("data")
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("items"), list):
+        return data["items"]
+    return []
+
 def _get(path: str) -> tuple[int, dict]:
     url = f"{GATEWAY}{path}"
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -45,6 +60,7 @@ def test_public_testcases_only_samples():
         status, data = _get(f"/problems/{PROBLEM_ID}/test-cases")
     assert status == 200, (status, data)
     items = data.get("items") or data.get("data") or []
+    items = _items(data if not isinstance(data, list) else data)
     assert isinstance(items, list), data
     for it in items:
         assert it.get("is_sample") in (True, "t", "true", 1), it
