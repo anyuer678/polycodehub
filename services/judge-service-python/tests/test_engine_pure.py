@@ -45,7 +45,7 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(engine_mod.MAX_PROCESSES_NATIVE, 2)
         self.assertEqual(engine_mod.MAX_PROCESSES_PYTHON, 4)
         self.assertEqual(engine_mod.MAX_PROCESSES_NODE, 16)
-        self.assertEqual(engine_mod.MAX_PROCESSES_JVM, 32)
+        self.assertEqual(engine_mod.MAX_PROCESSES_JVM, 128)
         self.assertEqual(engine_mod.MAX_OPEN_FILES, 64)
 
     def test_as_limits_java_higher(self):
