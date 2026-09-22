@@ -4,10 +4,10 @@ Date: 2026-09-22 · problem: Two Sum (id=1) · expected sample `[2,7,11,15]` + `
 
 | Language | Verdict | Runtime/Mem |
 |----------|---------|-------------|
-| python | **AC** | 63ms/9984kb |
-| javascript | **RE** | 377ms/28664kb |
-| cpp | **RE** | 1315ms/6232kb |
-| java | **CE** | 124ms/206716kb |
+| python | **AC** | 73ms/10048kb |
+| javascript | **AC** | 258ms/51032kb |
+| cpp | **RE** | 1176ms/5896kb |
+| java | **RE** | 552ms/33596kb |
 
 Notes:
 - Chain: JWT register → `POST /api/judge/submit` → RabbitMQ → sandbox_helper + sandbox_netblock → DB writeback.

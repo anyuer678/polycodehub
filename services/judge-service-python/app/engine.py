@@ -48,7 +48,7 @@ MAX_FILE_SIZE_KB = 64 * 1024  # 子进程单文件最大 64MB
 MAX_PROCESSES_NATIVE = 2
 MAX_PROCESSES_PYTHON = 4
 MAX_PROCESSES_NODE = 16
-MAX_PROCESSES_JVM = 32
+MAX_PROCESSES_JVM = 128
 COMPILE_MAX_PROCESSES = 32  # 编译器需 fork cc1/cc1plus/ld 等子进程，编译阶段放宽
 COMPILE_MAX_PROCESSES_JVM = 64  # javac 本身是 JVM
 MAX_OPEN_FILES = 64
@@ -81,6 +81,24 @@ SANDBOX_ENV = {
     "LANG": "C.UTF-8",
     "TMPDIR": "/tmp",
 }
+
+# 编译/运行工作目录根：/tmp 在 judge-worker 上常挂 noexec，编译产物无法 execvp。
+# 默认放在镜像可写的 /app/judge-work（可执行文件系统），可用 JUDGE_WORK_ROOT 覆盖。
+JUDGE_WORK_ROOT = os.environ.get("JUDGE_WORK_ROOT", "/app/judge-work")
+
+
+def _ensure_work_root() -> str:
+    root = JUDGE_WORK_ROOT
+    os.makedirs(root, exist_ok=True)
+    try:
+        os.chown(root, SANDBOX_UID, SANDBOX_GID)
+    except (OSError, AttributeError):
+        pass
+    try:
+        os.chmod(root, 0o700)
+    except OSError:
+        pass
+    return root
 
 
 def _setpriv_cmd(args: list[str], as_limit_kb: int, cpu_s: int,
@@ -432,12 +450,12 @@ class RealJudgeEngine(JudgeEngine):
 
     def _make_workdir(self) -> str:
         """创建 sandbox 可写的工作目录（worker 是 root，必须显式放权给 sandbox 用户）。"""
-        tmp = tempfile.mkdtemp(prefix="polycode-judge-")
+        tmp = tempfile.mkdtemp(prefix="polycode-judge-", dir=_ensure_work_root())
         self._chown_sandbox_workdir(tmp)
         return tmp
 
     def _run_cpp(self, source: str, input_data: str, start: float) -> _RunResult:
-        with tempfile.TemporaryDirectory(prefix="polycode-judge-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="polycode-judge-", dir=_ensure_work_root()) as tmp:
             self._chown_sandbox_workdir(tmp)
             src_path = os.path.join(tmp, "main.cpp")
             with open(src_path, "w", encoding="utf-8") as fh:
@@ -459,7 +477,7 @@ class RealJudgeEngine(JudgeEngine):
             return self._run_binary(exe, input_data, start, cwd=tmp)
 
     def _run_c(self, source: str, input_data: str, start: float) -> _RunResult:
-        with tempfile.TemporaryDirectory(prefix="polycode-judge-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="polycode-judge-", dir=_ensure_work_root()) as tmp:
             self._chown_sandbox_workdir(tmp)
             src_path = os.path.join(tmp, "main.c")
             with open(src_path, "w", encoding="utf-8") as fh:
@@ -481,7 +499,7 @@ class RealJudgeEngine(JudgeEngine):
             return self._run_binary(exe, input_data, start, cwd=tmp)
 
     def _run_java(self, source: str, input_data: str, start: float) -> _RunResult:
-        with tempfile.TemporaryDirectory(prefix="polycode-judge-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="polycode-judge-", dir=_ensure_work_root()) as tmp:
             self._chown_sandbox_workdir(tmp)
             src_path = os.path.join(tmp, "Main.java")
             with open(src_path, "w", encoding="utf-8") as fh:
@@ -499,7 +517,7 @@ class RealJudgeEngine(JudgeEngine):
                     memory_kb=memory_kb,
                 )
             return self._run_subprocess(
-                ["java", "-Xmx256m", "-Xss64m", "-XX:ActiveProcessorCount=2", "-XX:+UseSerialGC", "-cp", tmp, "Main"],
+                ["java", "-Xmx256m", "-Xss2m", "-XX:ActiveProcessorCount=2", "-XX:+UseSerialGC", "-cp", tmp, "Main"],
                 input_data,
                 start,
                 cwd=tmp,
