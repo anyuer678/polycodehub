@@ -42,7 +42,7 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(engine_mod.COMPILE_TIMEOUT_S, 10)
         self.assertEqual(MEMORY_LIMIT_KB, 512 * 1024)
         self.assertEqual(MAX_OUTPUT_CHARS, 65536)
-        self.assertEqual(engine_mod.MAX_PROCESSES, 1)
+        self.assertEqual(engine_mod.MAX_PROCESSES_NATIVE, 1)
         self.assertEqual(engine_mod.MAX_OPEN_FILES, 64)
 
     def test_as_limits_java_higher(self):
@@ -62,7 +62,7 @@ class SetprivCmdTest(unittest.TestCase):
             as_limit_kb=2048,
             cpu_s=2,
             fsize_kb=100,
-            nproc=1,
+            nproc=2,
             nofile=32,
         )
         self.assertTrue(cmd[0].endswith("python") or cmd[0].endswith("python.exe") or "python" in cmd[0])
@@ -71,7 +71,7 @@ class SetprivCmdTest(unittest.TestCase):
         self.assertEqual(env["SB_MEM_KB"], "2048")
         self.assertEqual(env["SB_CPU_S"], "2")
         self.assertEqual(env["SB_FSIZE_KB"], "100")
-        self.assertEqual(env["SB_NPROC"], "1")
+        self.assertEqual(env["SB_NPROC"], "2")
         self.assertEqual(env["SB_NOFILE"], "32")
         for secret in ("DB_PASSWORD", "REDIS_URL", "AMQP_URL", "AUTH_JWT_SECRET"):
             self.assertNotIn(secret, env)

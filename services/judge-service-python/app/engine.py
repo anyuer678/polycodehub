@@ -43,9 +43,26 @@ COMPILE_TIMEOUT_S = 10  # 编译超时单独放宽到 10 秒
 MEMORY_LIMIT_KB = 512 * 1024  # MLE 判定阈值（物理内存峰值）
 MAX_OUTPUT_CHARS = 65536
 MAX_FILE_SIZE_KB = 64 * 1024  # 子进程单文件最大 64MB
-MAX_PROCESSES = 1  # 仅允许子进程本身，禁止 fork 子进程
+# Runtime NPROC: 原生二进制可压到 1；Node/V8 与 JVM 需要工作线程/系统线程，
+# RLIMIT_NPROC=1 会在 clone/pthread 时 EAGAIN（表现为 RE / 启动失败）。
+MAX_PROCESSES_NATIVE = 2
+MAX_PROCESSES_PYTHON = 4
+MAX_PROCESSES_NODE = 16
+MAX_PROCESSES_JVM = 32
 COMPILE_MAX_PROCESSES = 32  # 编译器需 fork cc1/cc1plus/ld 等子进程，编译阶段放宽
+COMPILE_MAX_PROCESSES_JVM = 64  # javac 本身是 JVM
 MAX_OPEN_FILES = 64
+
+
+def _runtime_nproc(language: str) -> int:
+    lang = (language or "").lower()
+    if lang in {"java"}:
+        return MAX_PROCESSES_JVM
+    if lang in {"node", "javascript", "js"}:
+        return MAX_PROCESSES_NODE
+    if lang in {"python", "py"}:
+        return MAX_PROCESSES_PYTHON
+    return MAX_PROCESSES_NATIVE
 
 # sandbox_helper 在 stderr 末尾写入子进程自身的内存峰值（KB），供 engine 解析、避免
 # RUSAGE_CHILDREN 累计峰值被一次重编译永久污染导致后续假 MLE；该行不得透传给用户。
@@ -278,7 +295,7 @@ class RealJudgeEngine(JudgeEngine):
             raise
         return "".join(out_chunks), "".join(err_chunks)
 
-    def _run_subprocess(self, args: list[str], input_data: str, start: float,
+    def _run_subprocess(self, args: list[str], input_data: str, start: float, extra_env: dict | None = None,
                         cwd: Optional[str] = None, as_limit_kb: int = AS_LIMIT_KB_DEFAULT) -> _RunResult:
         """统一执行沙箱子进程：sandbox_helper 降权到 sandbox + 清洗环境 + 资源限制，
         使用 start_new_session 创建独立进程组，超时时向整个进程组发 SIGKILL。"""
@@ -287,9 +304,11 @@ class RealJudgeEngine(JudgeEngine):
             as_limit_kb=as_limit_kb,
             cpu_s=TIME_LIMIT_S,
             fsize_kb=MAX_FILE_SIZE_KB,
-            nproc=MAX_PROCESSES,
+            nproc=self._nproc_for(args),
             nofile=MAX_OPEN_FILES,
         )
+        if extra_env:
+            cmd_env.update(extra_env)
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -326,13 +345,41 @@ class RealJudgeEngine(JudgeEngine):
                               runtime_ms=runtime_ms, memory_kb=memory_kb, error_message=MLE_MSG)
         return _RunResult(status="OK", output=self._truncate(stdout or ""), runtime_ms=runtime_ms, memory_kb=memory_kb)
 
+
+    def _nproc_for(self, args: list[str]) -> int:
+        """Pick RLIMIT_NPROC from the executable being invoked."""
+        joined = " ".join(str(a) for a in args).lower()
+        if "java" in joined or "javac" in joined:
+            return MAX_PROCESSES_JVM
+        if "node" in joined:
+            return MAX_PROCESSES_NODE
+        if "python" in joined:
+            return MAX_PROCESSES_PYTHON
+        return MAX_PROCESSES_NATIVE
+
+    def _ensure_exec(self, path: str) -> None:
+        """Compiled artifacts must be executable by sandbox user (umask/ACL safe)."""
+        try:
+            os.chmod(path, 0o755)
+        except OSError:
+            pass
+        try:
+            os.chown(path, SANDBOX_UID, SANDBOX_GID)
+        except (OSError, AttributeError):
+            pass
+
     def _run_python(self, source: str, input_data: str, start: float) -> _RunResult:
         python_bin = shutil.which("python3") or "python"
         return self._run_subprocess([python_bin, "-c", source], input_data, start)
 
     def _run_node(self, source: str, input_data: str, start: float) -> _RunResult:
         # 限制 V8 堆上限，避免 Node 默认堆把虚拟内存吃满
-        return self._run_subprocess(["node", "--max-old-space-size=256", "-e", source], input_data, start)
+        return self._run_subprocess(
+            ["node", "--max-old-space-size=256", "--max-http-header-size=16384", "-e", source],
+            input_data,
+            start,
+            extra_env={"UV_THREADPOOL_SIZE": "2", "NODE_OPTIONS": "--max-old-space-size=256"},
+        )
 
     def _run_binary(self, exe: str, input_data: str, start: float, cwd: str) -> _RunResult:
         return self._run_subprocess([exe], input_data, start, cwd=cwd)
@@ -345,7 +392,7 @@ class RealJudgeEngine(JudgeEngine):
             as_limit_kb=AS_LIMIT_KB_JAVA,
             cpu_s=COMPILE_TIMEOUT_S,
             fsize_kb=MAX_FILE_SIZE_KB * 2,
-            nproc=COMPILE_MAX_PROCESSES,
+            nproc=COMPILE_MAX_PROCESSES_JVM if any(x in " ".join(args).lower() for x in ("javac", "java")) else COMPILE_MAX_PROCESSES,
             nofile=MAX_OPEN_FILES,
         )
         proc = subprocess.Popen(
@@ -407,7 +454,9 @@ class RealJudgeEngine(JudgeEngine):
                     runtime_ms=runtime_ms,
                     memory_kb=memory_kb,
                 )
-            return self._run_binary(os.path.join(tmp, "main"), input_data, start, cwd=tmp)
+            exe = os.path.join(tmp, "main")
+            self._ensure_exec(exe)
+            return self._run_binary(exe, input_data, start, cwd=tmp)
 
     def _run_c(self, source: str, input_data: str, start: float) -> _RunResult:
         with tempfile.TemporaryDirectory(prefix="polycode-judge-") as tmp:
@@ -427,7 +476,9 @@ class RealJudgeEngine(JudgeEngine):
                     runtime_ms=runtime_ms,
                     memory_kb=memory_kb,
                 )
-            return self._run_binary(os.path.join(tmp, "main"), input_data, start, cwd=tmp)
+            exe = os.path.join(tmp, "main")
+            self._ensure_exec(exe)
+            return self._run_binary(exe, input_data, start, cwd=tmp)
 
     def _run_java(self, source: str, input_data: str, start: float) -> _RunResult:
         with tempfile.TemporaryDirectory(prefix="polycode-judge-") as tmp:
@@ -436,7 +487,7 @@ class RealJudgeEngine(JudgeEngine):
             with open(src_path, "w", encoding="utf-8") as fh:
                 fh.write(source)
             rc, out, err = self._run_compile(
-                ["javac", "-J-Xmx512m", "-J-XX:CompressedClassSpaceSize=256m", "-encoding", "UTF-8", src_path],
+                ["javac", "-J-Xmx512m", "-J-XX:CompressedClassSpaceSize=256m", "-J-XX:ActiveProcessorCount=1", "-encoding", "UTF-8", src_path],
                 cwd=tmp,
             )
             if rc != 0:
@@ -448,7 +499,7 @@ class RealJudgeEngine(JudgeEngine):
                     memory_kb=memory_kb,
                 )
             return self._run_subprocess(
-                ["java", "-Xmx256m", "-Xss64m", "-cp", tmp, "Main"],
+                ["java", "-Xmx256m", "-Xss64m", "-XX:ActiveProcessorCount=2", "-XX:+UseSerialGC", "-cp", tmp, "Main"],
                 input_data,
                 start,
                 cwd=tmp,
