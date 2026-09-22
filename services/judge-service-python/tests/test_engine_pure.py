@@ -42,7 +42,10 @@ class ConstantsTest(unittest.TestCase):
         self.assertEqual(engine_mod.COMPILE_TIMEOUT_S, 10)
         self.assertEqual(MEMORY_LIMIT_KB, 512 * 1024)
         self.assertEqual(MAX_OUTPUT_CHARS, 65536)
-        self.assertEqual(engine_mod.MAX_PROCESSES_NATIVE, 1)
+        self.assertEqual(engine_mod.MAX_PROCESSES_NATIVE, 2)
+        self.assertEqual(engine_mod.MAX_PROCESSES_PYTHON, 4)
+        self.assertEqual(engine_mod.MAX_PROCESSES_NODE, 16)
+        self.assertEqual(engine_mod.MAX_PROCESSES_JVM, 32)
         self.assertEqual(engine_mod.MAX_OPEN_FILES, 64)
 
     def test_as_limits_java_higher(self):
