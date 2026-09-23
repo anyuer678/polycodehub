@@ -5,10 +5,11 @@ on:
     paths:
       - "services/judge-service-python/**"
       - ".github/workflows/sandbox-adversarial.yml"
+  # 故意不加 paths 过滤：`adversarial` 是 main 的 required status check，
+  # 而 GitHub 对「paths 未命中」的 workflow 不产生任何 check-run →
+  # 不碰 services/judge-service-python/** 的 PR 会永久卡在 "Waiting for status to be reported"
+  # （mergeable_state=blocked，其它检查全绿）。本 job 约 25s，PR 一律跑成本可接受。
   pull_request:
-    paths:
-      - "services/judge-service-python/**"
-      - ".github/workflows/sandbox-adversarial.yml"
   workflow_dispatch:
 
 permissions:
