@@ -29,7 +29,27 @@ from app.engine import RealJudgeEngine  # noqa: E402
 
 class WorkdirSecurityTest(unittest.TestCase):
     def setUp(self):
+        # 生产默认工作根是镜像内的 /app/judge-work，CI runner 上不可写。
+        # 测试只验证「前缀 + 0700」这一契约，因此把工作根重定向到临时目录，
+        # 生产默认值由 test_default_work_root_is_container_path 单独守护。
+        self._orig_work_root = engine_mod.JUDGE_WORK_ROOT
+        self._tmp_root = tempfile.mkdtemp(prefix="polycode-test-root-")
+        engine_mod.JUDGE_WORK_ROOT = self._tmp_root
         self.engine = RealJudgeEngine()
+
+    def tearDown(self):
+        engine_mod.JUDGE_WORK_ROOT = self._orig_work_root
+        try:
+            os.rmdir(self._tmp_root)
+        except OSError:
+            pass
+
+    def test_default_work_root_is_container_path(self):
+        # 生产语义不得被测试改写：默认仍是镜像内可执行的 /app/judge-work，
+        # 且必须能通过 JUDGE_WORK_ROOT 环境变量覆盖。
+        self.assertEqual(self._orig_work_root, "/app/judge-work")
+        src = Path(engine_mod.__file__).read_text(encoding="utf-8", errors="replace")
+        self.assertIn('os.environ.get("JUDGE_WORK_ROOT"', src)
 
     def test_make_workdir_prefix_and_mode(self):
         path = self.engine._make_workdir()
