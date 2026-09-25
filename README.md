@@ -6,6 +6,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12-green)](https://www.python.org/)
 [![Java](https://img.shields.io/badge/Java-21-orange)](https://www.java.com/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)](https://www.docker.com/)
+[![CI](https://github.com/anyuer678/polycodehub/actions/workflows/ci.yml/badge.svg)](https://github.com/anyuer678/polycodehub/actions/workflows/ci.yml)
 
 **全栈在线判题（OJ）平台** — 开发者社区 + 代码评测 + 排行榜 + 管理后台 + 异步任务链路。
 
