@@ -76,7 +76,7 @@ jobs:
       - name: NS jail debug probe (strace the failing exec)
         run: |
           set -x
-          sudo gcc -O2 -o /tmp/sb_nb services/judge-service-python/sandbox_netblock.c -lseccomp
+          sudo gcc -O2 -o /tmp/sb_nb sandbox_netblock.c -lseccomp
           NR=$(mktemp -d); WD=$(mktemp -d); chmod 755 $WD
           sudo -E env SB_NS=1 SB_NS_NEWROOT=$NR SB_NS_DIRS_RO="/usr,/lib,/lib64,/bin" \
             SB_UID=1002 SB_GID=1001 SANDBOX_NETBLOCK=/tmp/sb_nb PATH=$PATH \
