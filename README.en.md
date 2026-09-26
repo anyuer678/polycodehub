@@ -17,19 +17,21 @@ Fully usable on the web, covering problem practice, code submission, real-time j
 <p align="center"><img src="preview.png" alt="PolyCodeHub home preview" width="800"></p>
 
 
-> **Security boundary note**: the current sandbox uses process-level defense in depth (setuid + seccomp + rlimit + env scrubbing) and is **not container-grade isolation**. seccomp runs in blacklist mode (default allow + blocking 17 classes of dangerous syscalls), not a full whitelist. Hidden test cases are redacted at the API query layer. Do not use it in untrusted multi-tenant scenarios.
+> **Security boundary note**: the sandbox is process-level defense in depth — setuid drop + seccomp (blacklist by default / **trace-driven allowlist** opt-in) + cgroup v2 (per-judgment pids/memory isolation, opt-in) + namespaces & chroot jail (opt-in) + rlimit + env scrubbing. **It is still not container-grade isolation and has not been audited for multi-tenancy.** Per-layer switches, capability checks and open items: [THREAT_MODEL.md](THREAT_MODEL.md) and [docs/SANDBOX_TESTING.md](docs/SANDBOX_TESTING.md); the full evolution story: [sandbox evolution note](https://anyuer678.github.io/yuer.dev/notes/polycodehub-sandbox-notes/). Hidden test cases are redacted at the API query layer. Do not use it in untrusted multi-tenant scenarios.
 
 ## Features
 
 ### Judging core
 - **Multi-language support** — Python 3 / Node.js / C++ (g++ 14) / C (gcc 14) / Java 21
-- **Real judging sandbox** — non-container, process-level isolation:
-  - `setuid` drops privileges to a dedicated sandbox user + clears supplementary groups
-  - **seccomp defense in depth** (17 rules: blocking `AF_INET`/`AF_INET6`/`AF_NETLINK` sockets + `ptrace` + `mount`/`umount2` + `reboot`/`kexec_load` + `io_uring_setup` + `bpf` + `process_vm_readv`/`process_vm_writev` + `userfaultfd` + `perf_event_open` + `acct`/`ioperm`/`iopl` + `swapon`/`swapoff`)
-  - Resource limits (virtual memory / CPU / file size / process count / file descriptors)
-  - Environment variable scrubbing (credentials invisible) and tightened `site-packages` permissions
+- **Real judging sandbox** — four defense layers, each independently opt-in with explicit degradation:
+  - `setuid` drops privileges to a dedicated sandbox user + clears supplementary groups (all modes)
+  - **seccomp dual mode**: blacklist (17 rules, default) + **trace-driven allowlist** (`SB_PROFILE` per-language syscall set measured with strace; `socket` restricted to the AF_UNIX domain via argument filtering; unknown profile exits 125 fail-closed)
+  - **cgroup v2 per-judgment isolation** (`JUDGE_CGROUP=off/auto/require`): `pids.max` contains fork bombs per judgment (fixing the per-user NPROC cross-worker pollution), `memory.max` hard cap + `memory.peak` (page cache included) + `oom_kill` as explicit MLE evidence
+  - **namespaces + chroot jail** (`JUDGE_NS=off/auto/require`): empty netns (no interfaces at all) + PID ns (user code = PID 1 inside the ns, host processes invisible) + MOUNT ns + tmpfs minimal root (runtime dirs bound read-only, workdir bound read-write, /proc mounted inside the ns)
+  - rlimits (virtual memory / CPU / file size / file descriptors) + env scrubbing (credentials invisible) + tightened `site-packages` permissions
   - Per-child peak memory accounting (`__SB_RUSAGE__`), eliminating false MLEs caused by cumulative values
   - Malicious programs (sleep loops after closing fds) are terminated by the timeout mechanism and never wedge the Worker
+  - Full evolution story: [sandbox evolution note (site)](https://anyuer678.github.io/yuer.dev/notes/polycodehub-sandbox-notes/)
 - **Judging state machine** — `PENDING → AC / WA / CE / RE / TLE / MLE`, with idempotent write-back and leaderboard counter linkage
 - **Custom dry runs** — run code against custom stdin before submitting
 - **Test case management** — single item / bulk JSON import / edit / delete; hidden cases are never returned on non-admin paths
@@ -139,7 +141,7 @@ polycodehub/
 
 This project is provided "AS IS" under the **GPL-3.0** license; the author and contributors are **not liable for any direct, indirect, incidental, or consequential damages** arising from its use, including but not limited to business failures, data loss, service outages, or security incidents in real production or living environments. If you intend to use this project in production or business scenarios, assess the risks yourself and **modify the code as needed to fit your requirements**; any impact caused by using this project (including modified versions) is borne by the user.
 
-**Security statement**: the judging sandbox uses process-level defense in depth (setuid + seccomp blacklist + rlimit) and is **not container-grade isolation**; it has not been audited against a production multi-tenant threat model. Hidden test cases are redacted at the API query layer but retained in the database for admin audit. Self-built security mechanisms must be independently evaluated against your actual deployment scenario.
+**Security statement**: the judging sandbox uses process-level defense in depth (setuid + seccomp blacklist/allowlist + cgroup v2 + namespaces/chroot + rlimits, each layer independently opt-in with explicit degradation) and is **not container-grade isolation**; it has not been audited against a production multi-tenant threat model. Evolution notes and open items: [THREAT_MODEL.md](THREAT_MODEL.md). Hidden test cases are redacted at the API query layer but retained in the database for admin audit. Self-built security mechanisms must be independently evaluated against your actual deployment scenario.
 
 ## License
 
