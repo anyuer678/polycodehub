@@ -5,19 +5,26 @@
   SB_MEM_KB    RLIMIT_AS 虚拟内存上限（KB）
   SB_CPU_S     RLIMIT_CPU 秒数
   SB_FSIZE_KB  RLIMIT_FSIZE 单文件上限（KB）
-  SB_NPROC     RLIMIT_NPROC 进程数（在 setuid 后设置，只约束 sandbox 用户）
+  SB_NPROC     RLIMIT_NPROC 进程数（在 setuid 后设置，只约束 sandbox 用户；
+               设 SB_CGROUP 时跳过——fork 炸弹防护改由 cgroup pids.max 按判题隔离）
   SB_NOFILE    RLIMIT_NOFILE 文件描述符数
+  SB_CGROUP    （opt-in）判题专属 cgroup v2 目录：子进程附着（fail-closed）、
+               pids.max/memory.max 由 engine 预设
 
 fork 模式：父进程（root）在子进程结束后用 wait4 取【子进程自身】的 rusage，
 将物理内存峰值以 `__SB_RUSAGE__=<kb>` 一行写入 stderr，供 engine.py 解析——
 避免 worker 进程级 RUSAGE_CHILDREN 累计峰值导致的永久性假 MLE。
+cgroup 模式额外写 `__SB_CGROUP__=<peak_kb>,oom=<n>`（memory.peak 含 page cache、
+memory.events 的 oom_kill 为 OOM 显式证据；读取失败容错降级，不影响主流程）。
 
 安全层次：
   1. setuid 降权到 sandbox (uid 1002) + 清空补充组
-  2. seccomp 纵深防御（sandbox_netblock）：阻止网络/调试/挂载/reboot/io_uring
-  3. rlimit 资源限制（内存/CPU/文件大小/进程数/文件描述符）
-  4. 环境变量清洗（仅保留 PATH/HOME/LANG/TMPDIR）
-  5. site-packages chmod 700（sandbox 用户不可读）
+  2. cgroup v2（opt-in，SB_CGROUP）：pids.max 按判题隔离 fork 炸弹 + memory.max 硬上限
+  3. seccomp 纵深防御（sandbox_netblock）：黑名单（默认）/ 白名单（SB_PROFILE），
+     阻止网络/调试/挂载/reboot/io_uring
+  4. rlimit 资源限制（内存/CPU/文件大小/文件描述符；NPROC 仅非 cgroup 模式）
+  5. 环境变量清洗（仅保留 PATH/HOME/LANG/TMPDIR）
+  6. site-packages chmod 700（sandbox 用户不可读）
 """
 import os
 import resource
@@ -41,6 +48,27 @@ DEFAULT_LIMITS = {
     "SB_NPROC": 1,
     "SB_NOFILE": 64,
 }
+
+
+def _read_int(path: str) -> int | None:
+    """容错读整数文件（cgroup 遥测用）；失败返回 None，不影响判题主流程。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return int(f.read().strip() or "0")
+    except (OSError, ValueError):
+        return None
+
+
+def _read_oom_kills(cgroup_path: str) -> int | None:
+    """memory.events 的 oom_kill 计数；文件缺失（旧内核）返回 None。"""
+    try:
+        with open(os.path.join(cgroup_path, "memory.events"), encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("oom_kill"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
 
 
 def resolve_sandbox_ids(environ: dict | None = None) -> tuple[int, int]:
@@ -123,19 +151,36 @@ def main() -> int:
         except OSError as exc:
             os.write(2, f"__SB_ERROR__=setuid failed: {exc}\n".encode())
             os._exit(126)
+        # cgroup v2（opt-in）：把本进程挂进判题专属 cgroup（engine 已预设
+        # pids.max/memory.max 并把目录 chown 给 sandbox 用户）。必须在 exec
+        # 用户代码之前完成，否则存在未受控窗口；失败即 fail-closed 拒绝判题。
+        sb_cgroup = os.environ.get("SB_CGROUP", "")
+        if sb_cgroup:
+            try:
+                with open(os.path.join(sb_cgroup, "cgroup.procs"), "w") as f:
+                    f.write(str(os.getpid()))
+            except OSError as exc:
+                os.write(2, f"__SB_ERROR__=cgroup attach failed: {exc}\n".encode())
+                os._exit(125)
         # 经 sandbox_netblock 设置 seccomp 安全隔离后再 exec 用户代码；
         # 工具缺失时拒绝执行（fail-closed），防止用户代码绕过安全限制
         if not netblock_ready(netblock_bin):
             os.write(2, b"__SB_ERROR__=sandbox_netblock missing or not executable; refuse to judge\n")
             os._exit(125)
         cmd = [netblock_bin, *args]
-        try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
-        except OSError as exc:
-            # 静默失败会让 fork 炸弹防护失效（多 worker 并发时 sandbox 用户已有
-            # 其他子进程，setrlimit 会因进程数超过新软限制而失败）——必须可见
-            os.write(2, f"__SB_ERROR__=setrlimit NPROC failed: {exc}\n".encode())
-            os._exit(125)
+        if sb_cgroup:
+            # cgroup 模式：fork 炸弹防护由 pids.max 按【判题】隔离，跳过 NPROC rlimit。
+            # RLIMIT_NPROC 按【用户】全局计数：多 worker 并发时互相污染（这正是
+            # 上面 setrlimit NPROC failed 的真根源），pids.max 语义才是对的。
+            pass
+        else:
+            try:
+                resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
+            except OSError as exc:
+                # 静默失败会让 fork 炸弹防护失效（多 worker 并发时 sandbox 用户已有
+                # 其他子进程，setrlimit 会因进程数超过新软限制而失败）——必须可见
+                os.write(2, f"__SB_ERROR__=setrlimit NPROC failed: {exc}\n".encode())
+                os._exit(125)
         try:
             os.execvp(cmd[0], cmd)
         except OSError as exc:
@@ -145,6 +190,16 @@ def main() -> int:
     # 父进程（root）：wait4 拿子进程自身的 rusage（非进程累计值）
     _, status, ru = os.wait4(pid, 0)
     maxrss_kb = getattr(ru, "ru_maxrss", 0) or 0
+    # cgroup 遥测（容错降级：读不到就不写标记，engine 回退 rusage）
+    sb_cgroup = os.environ.get("SB_CGROUP", "")
+    if sb_cgroup:
+        peak = _read_int(os.path.join(sb_cgroup, "memory.peak"))
+        oom = _read_oom_kills(sb_cgroup)
+        if peak is not None or oom is not None:
+            try:
+                os.write(2, f"__SB_CGROUP__={peak or 0},oom={oom or 0}\n".encode())
+            except OSError:
+                pass
     try:
         os.write(2, f"__SB_RUSAGE__={maxrss_kb}\n".encode())
     except OSError:
