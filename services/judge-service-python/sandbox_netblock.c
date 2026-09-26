@@ -39,6 +39,7 @@
  */
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <sched.h>
 #include <seccomp.h>
 #include <stdio.h>
@@ -166,6 +167,9 @@ static int setup_ns_jail(void) {
         if (snprintf(dst, sizeof(dst), "%s/etc/%s", newroot, ETC_FILES[i]) >= (int)sizeof(dst)) continue;
         struct stat st;
         if (stat(src, &st) != 0) continue; /* 宿主没有该文件则跳过 */
+        /* bind 挂载要求目标存在：先在 jail 内创建空文件（bind 后内容被源覆盖） */
+        int fd = open(dst, O_WRONLY | O_CREAT | O_EXCL, 0644);
+        if (fd >= 0) close(fd);
         if (bind_file_ro(src, dst) != 0) {
             fprintf(stderr, "sandbox_netblock: bind %s: %s\n", src, strerror(errno));
             return -1;

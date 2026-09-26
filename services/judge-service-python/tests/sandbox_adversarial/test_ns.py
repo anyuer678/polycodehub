@@ -186,7 +186,7 @@ def test_ns_c_binary_runs(tmp_path: Path):
 
 def test_ns_fork_bomb_contained_with_cgroup(tmp_path: Path):
     """M2+M3 组合：ns jail 内 fork 炸弹仍被 cgroup pids.max 按判题拦截。"""
-    from app.cgroup import JudgeCgroup
+    from app.cgroup import CgroupUnavailable, JudgeCgroup
 
     code = (
         "import os\n"
@@ -205,7 +205,12 @@ def test_ns_fork_bomb_contained_with_cgroup(tmp_path: Path):
     workdir = tempfile.mkdtemp(prefix="sb-wd-")
     os.chmod(workdir, 0o755)
     newroot = tempfile.mkdtemp(prefix="sb-root-")
-    cg = JudgeCgroup.create(mem_kb=262144, pids_max=4, owner_uid=SANDBOX_UID)
+    try:
+        cg = JudgeCgroup.create(mem_kb=262144, pids_max=4, owner_uid=SANDBOX_UID)
+    except CgroupUnavailable as exc:
+        shutil.rmtree(workdir, ignore_errors=True)
+        shutil.rmtree(newroot, ignore_errors=True)
+        pytest.skip(f"cgroup delegation unavailable on this runner: {exc}")
     env = os.environ.copy()
     env.update({
         "SANDBOX_NETBLOCK": SANDBOX_NETBLOCK,
