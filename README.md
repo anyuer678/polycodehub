@@ -16,19 +16,21 @@
 <p align="center"><img src="preview.png" alt="PolyCodeHub 平台首页预览" width="800"></p>
 
 
-> **安全边界说明**：当前沙箱为进程级纵深防御（setuid + seccomp + rlimit + env 清洗），**不是容器级隔离**。seccomp 采用黑名单模式（默认允许 + 阻止 17 类危险 syscall），非全白名单。隐藏测试用例已从 API 查询层脱敏。请勿在不受信任的多租户场景下使用。
+> **安全边界说明**：沙箱为进程级纵深防御——setuid 降权 + seccomp（黑名单默认 / **trace 驱动白名单** opt-in）+ cgroup v2（pids/memory 按判题隔离，opt-in）+ namespaces & chroot jail（opt-in）+ rlimit + env 清洗。**仍不是容器级隔离、未做多租户审计**。各层启用开关、能力校验与未修复项见 [THREAT_MODEL.md](THREAT_MODEL.md) 与 [docs/SANDBOX_TESTING.md](docs/SANDBOX_TESTING.md)，演进全记录见[站点笔记](https://anyuer678.github.io/yuer.dev/notes/polycodehub-sandbox-notes/)。隐藏测试用例已从 API 查询层脱敏。请勿在不受信任的多租户场景下使用。
 
 ## 功能特性
 
 ### 判题核心
 - **多语言支持** — Python 3 / Node.js / C++ (g++ 14) / C (gcc 14) / Java 21
-- **真实判题沙箱** — 非容器进程级隔离：
-  - `setuid` 降权到专用 sandbox 用户 + 清空补充组
-  - **seccomp 纵深防御**（17 条规则：阻止 `AF_INET`/`AF_INET6`/`AF_NETLINK` socket + `ptrace` + `mount`/`umount2` + `reboot`/`kexec_load` + `io_uring_setup` + `bpf` + `process_vm_readv`/`process_vm_writev` + `userfaultfd` + `perf_event_open` + `acct`/`ioperm`/`iopl` + `swapon`/`swapoff`）
-  - 资源限制（虚拟内存 / CPU / 文件大小 / 进程数 / 文件描述符）
-  - 环境变量清洗（凭据不可见）、`site-packages` 权限收紧
+- **真实判题沙箱** — 四层纵深防御，各层 opt-in 可独立启用、能力不可用时显式降级：
+  - `setuid` 降权到专用 sandbox 用户 + 清空补充组（全部模式）
+  - **seccomp 双模式**：黑名单（17 条规则，默认）+ **trace 驱动白名单**（`SB_PROFILE` 按语言放行 strace 实测 syscall 集；`socket` 仅 AF_UNIX 域参数过滤；未知 profile 退出 125 fail-closed）
+  - **cgroup v2 按判题隔离**（`JUDGE_CGROUP=off/auto/require`）：`pids.max` 按判题拦截 fork 炸弹（修复 NPROC 按用户计数的并发污染）、`memory.max` 硬上限 + `memory.peak`（含 page cache）+ `oom_kill` 显式 MLE 证据
+  - **namespaces + chroot jail**（`JUDGE_NS=off/auto/require`）：空 netns（无接口）+ PID ns（用户代码 = ns 内 PID 1，宿主进程不可见）+ MOUNT ns + tmpfs 最小根（运行时目录 RO bind、工作目录 RW bind、/proc ns 内挂载）
+  - rlimit（虚拟内存 / CPU / 文件大小 / 文件描述符）+ 环境变量清洗（凭据不可见）+ `site-packages` 权限收紧
   - 子进程自身峰值内存统计（`__SB_RUSAGE__`），杜绝累计值导致的假 MLE
   - 恶意程序（关闭 fd 后 sleep 死循环）会被超时机制终止，不会卡死 Worker
+  - 演进全记录：[判题沙箱演进（站点笔记）](https://anyuer678.github.io/yuer.dev/notes/polycodehub-sandbox-notes/)
 - **判题状态机** — `PENDING → AC / WA / CE / RE / TLE / MLE`，幂等回写与排行榜计数联动
 - **自定义试运行** — 提交前用自定义 stdin 在线试跑代码
 - **测试用例管理** — 单条 / 批量 JSON 导入 / 编辑 / 删除；非 admin 路径不返回隐藏用例
@@ -138,7 +140,7 @@ polycodehub/
 
 本项目按 **GPL-3.0** 协议以"现状"（AS IS）提供，作者与贡献者**不对使用本项目产生的任何直接、间接、偶然或后果性损失负责**，包括但不限于：实际生产/生活环境中的业务故障、数据丢失、服务中断、安全事件等任何恶劣结果。若需将本项目用于实际生产或业务场景，请自行充分评估风险，并**按需修改代码以满足你的实际需求**；任何因使用本项目（含修改后版本）造成的影响，均由使用者自行承担。
 
-**安全声明**：判题沙箱为进程级纵深防御（setuid + seccomp 黑名单 + rlimit），**非容器级隔离**，未按生产级多租户威胁模型审计。隐藏测试用例已从 API 查询层脱敏，但数据库中仍保留供管理员审计。自研安全机制需结合实际部署场景独立评估。
+**安全声明**：判题沙箱为进程级纵深防御（setuid + seccomp 黑名单/白名单 + cgroup v2 + namespaces/chroot + rlimit，各层 opt-in 可独立降级），**非容器级隔离**，未按生产级多租户威胁模型审计；演进记录与未修复项见 [THREAT_MODEL.md](THREAT_MODEL.md)。隐藏测试用例已从 API 查询层脱敏，但数据库中仍保留供管理员审计。自研安全机制需结合实际部署场景独立评估。
 
 ## 协议
 
