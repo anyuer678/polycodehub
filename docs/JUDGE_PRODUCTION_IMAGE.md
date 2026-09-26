@@ -96,3 +96,31 @@ docker compose -f infra/docker/docker-compose.prod.yml up -d
 ```
 
 相关：Issue #7 · `docs/SANDBOX_TESTING.md` · `docs/REGRESSION_FROM_FIXLOG.md`
+
+## 沙箱 opt-in 层的部署要求（M1-M3，2026-09）
+
+三层 opt-in 沙箱（seccomp 白名单 / cgroup v2 / ns+jail）对容器的额外要求：
+
+| 层 | 环境变量 | 容器要求 | 不可用时 |
+|----|----------|----------|----------|
+| seccomp 白名单 | `JUDGE_SECCOMP_WHITELIST=1` | 无额外要求（libseccomp 已在镜像内） | 未启用则走黑名单 |
+| cgroup v2 | `JUDGE_CGROUP=off/auto/require` | cgroup v2 可写委托：`cgroup: privileged` + `/sys/fs/cgroup` rw 挂载（或宿主 systemd slice 委托） | auto 静默回退 rlimit；require 抛错 |
+| ns + jail | `JUDGE_NS=off/auto/require` | `CAP_SYS_ADMIN`（unshare/mount/chroot/mknod）：`--cap-add SYS_ADMIN --cap-add SYS_CHROOT` | 125 fail-closed；auto 回退非 ns |
+
+compose 片段示例（prod，按需裁剪）：
+
+```yaml
+  judge-worker:
+    # ...
+    cgroup: privileged
+    cap_add:
+      - SYS_ADMIN
+      - SYS_CHROOT
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+```
+
+降级语义与能力校验见 [SANDBOX_TESTING.md](SANDBOX_TESTING.md)；未修复项与延期决策跟踪：
+- #23 cgroup cpu.max（与 RLIMIT_CPU 的 TLE 语义协调）
+- #24 java/build-java 白名单名单实证
+- #25 jail 内按需只读挂载 /sys
