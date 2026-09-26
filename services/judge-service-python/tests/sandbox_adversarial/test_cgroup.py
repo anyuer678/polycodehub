@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from app.cgroup import JudgeCgroup, cgroup_v2_available
+from app.cgroup import CgroupUnavailable, JudgeCgroup, cgroup_v2_available
 
 ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_HELPER = ROOT / "app" / "sandbox_helper.py"
@@ -73,8 +73,14 @@ def _full_env() -> bool:
 def _run_in_cgroup(code: str, tmp_path: Path, mem_kb: int, pids: int,
                    argv: list[str] | None = None,
                    env_extra: dict | None = None) -> tuple[subprocess.CompletedProcess, JudgeCgroup]:
-    """测试自建 cgroup（engine 在真实链路里做的事），经 helper 跑用户代码。"""
-    cg = JudgeCgroup.create(mem_kb=mem_kb, pids_max=pids, owner_uid=SANDBOX_UID)
+    """测试自建 cgroup（engine 在真实链路里做的事），经 helper 跑用户代码。
+
+    runner 未委托 cgroup 写权限（写 memory.max EACCES）时 skip——此时 cgroup 层
+    的验证应在具备委托的部署环境执行；意外的非委托类错误仍会正常失败。"""
+    try:
+        cg = JudgeCgroup.create(mem_kb=mem_kb, pids_max=pids, owner_uid=SANDBOX_UID)
+    except CgroupUnavailable as exc:
+        pytest.skip(f"cgroup delegation unavailable on this runner: {exc}")
     env = os.environ.copy()
     env.update({
         "SANDBOX_NETBLOCK": SANDBOX_NETBLOCK,
@@ -159,8 +165,11 @@ def test_cgroup_concurrent_judgments_are_isolated(tmp_path: Path):
     cgs = []
     try:
         for i in range(2):
-            cg = JudgeCgroup.create(mem_kb=262144, pids_max=3, owner_uid=SANDBOX_UID,
-                                    name=f"conc-{uuid.uuid4().hex[:8]}-{i}")
+            try:
+                cg = JudgeCgroup.create(mem_kb=262144, pids_max=3, owner_uid=SANDBOX_UID,
+                                        name=f"conc-{uuid.uuid4().hex[:8]}-{i}")
+            except CgroupUnavailable as exc:
+                pytest.skip(f"cgroup delegation unavailable on this runner: {exc}")
             cgs.append(cg)
             e = dict(env)
             e["SB_CGROUP"] = cg.path
