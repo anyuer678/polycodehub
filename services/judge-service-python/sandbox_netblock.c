@@ -1,59 +1,65 @@
 /*
- * sandbox_netblock：判题沙箱安全隔离工具。
+ * sandbox_netblock：判题沙箱安全隔离工具（seccomp + 可选 namespaces/jail 门卫）。
  *
  * 用法: sandbox_netblock <cmd...>
- * 在 exec 用户代码前设置 seccomp filter。
+ * 在 exec 用户代码前设置安全边界，模式由环境变量组合决定：
  *
- * 双模式（由环境变量 SB_PROFILE 选择）：
+ * 1) seccomp 模式（SB_PROFILE）——两种实现共用：
+ *    - SB_PROFILE 未设置：黑名单（默认放行 + 定向拒绝危险 syscall，历史行为）
+ *    - SB_PROFILE=<name>：白名单（默认 EPERM，仅放行 sandbox_profiles.h 名单；
+ *      socket 仅 AF_UNIX 域；未知 profile 退出 125 fail-closed）
  *
- * 1) SB_PROFILE 未设置（默认）——黑名单模式，行为与历史版本完全一致：
- *    默认放行，定向阻止危险 syscall（网络/调试/挂载/内核攻击面等）。
+ * 2) namespaces + jail 门卫（SB_NS=1，opt-in，要求以 root 运行）：
+ *    helper 在 ns 模式下不再 setuid，由本工具按顺序完成：
+ *      a) unshare(CLONE_NEWNET)：空网络栈，接口都不存在（比黑名单 socket 更彻底；
+ *         seccomp 的 socket 拒绝保留为纵深防御）
+ *      b) unshare(CLONE_NEWPID)：新 PID 空间，本进程成为 ns 内 PID 1，
+ *         用户代码不可见/不可寻址宿主进程
+ *      c) unshare(CLONE_NEWNS) + MS_PRIVATE：独立挂载表
+ *      d) 构建最小 jail 根（SB_NS_NEWROOT 处 tmpfs）：
+ *         - SB_NS_DIRS_RO（逗号分隔的宿主绝对路径，如 /usr,/lib,/lib64,/bin）
+ *           逐个 bind 挂载为只读（动态链接器/运行时/编译产物依赖）
+ *         - /etc 最小文件集（ld.so.cache/nsswitch/hosts/passwd 等）RO bind
+ *         - 判题工作目录（getcwd()）按原路径 bind 为 RW（argv 路径保持有效）
+ *         - /tmp tmpfs（MS_NOSUID，mode 1777）；/dev tmpfs + null/zero/random/urandom
+ *         - /proc（新 PID ns 内挂载，仅可见 ns 内进程）
+ *      e) chroot(jail) → setgroups([])/setgid/setuid（SB_UID/SB_GID）
+ *      f) seccomp（同 1）
  *
- * 2) SB_PROFILE=<name>（opt-in，需 engine 侧 JUDGE_SECCOMP_WHITELIST=1）——白名单模式：
- *    默认拒绝（SCMP_ACT_ERRNO(EPERM)），仅放行 sandbox_profiles.h 中对应 profile
- *    的名单（BASELINE ∪ 该语言增集）+ 一条带参数过滤的 socket 规则（仅 AF_UNIX 域）。
- *    - profile 名单外的 syscall 一律 EPERM；
- *    - 未知名单（SB_PROFILE 值不在 SB_PROFILES 内）→ 直接退出 125（fail-closed）；
- *    - 名单内但目标内核不存在的 syscall → 跳过并打 warning（不存在即无攻击面）。
+ *    无 CAP_SYS_ADMIN（非 root / 容器未授权）时 SB_NS 直接退出 125（fail-closed）。
  *
  * 黑名单阻止列表（纵深防御，在 setuid 降权 + rlimit 之上的第二层）：
- *   网络：AF_INET / AF_INET6 / AF_NETLINK socket（判题无需网络）
- *   调试：ptrace（防止调试器附加 / 代码注入 / 进程内存读取）
- *   文件系统：mount / umount2（防止容器逃逸 / 文件系统篡改）
- *   系统：reboot / kexec_load（防止系统重启 / 内核替换）
- *   内核攻击面：io_uring_setup、bpf、userfaultfd（已知提权 CVE）
- *   进程间内存：process_vm_readv / process_vm_writev（防止跨进程内存读写）
- *   性能监控：perf_event_open（防止侧信道攻击）
- *   权限：acct / ioperm / iopl（防止进程记账和端口 I/O）
- *   交换：swapon / swapoff（防止交换分区操作）
- *
- * 允许：AF_UNIX（本机进程通信，sandbox_helper 需要）
- *
- * 由 sandbox_helper 在 setuid 降权后调用：本工具以 sandbox 用户运行，
- * 先设置 no_new_privs 再加载 filter（非特权进程的要求），之后 execvp
- * 用户代码，seccomp filter 在 exec 后保留。
+ *   网络：AF_INET / AF_INET6 / AF_NETLINK socket；调试：ptrace；
+ *   文件系统：mount / umount2；系统：reboot / kexec_load；
+ *   内核攻击面：io_uring_setup、bpf、userfaultfd；
+ *   进程间内存：process_vm_readv / writev；侧信道：perf_event_open；
+ *   权限：acct / ioperm / iopl；交换：swapon / swapoff。
  *
  * 编译（Dockerfile/CI）: gcc -O2 -o sandbox_netblock sandbox_netblock.c -lseccomp
  */
 #define _GNU_SOURCE
 #include <errno.h>
+#include <sched.h>
 #include <seccomp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <sys/types.h>
 #include <unistd.h>
+#include <grp.h>
 
 #include "sandbox_profiles.h"
 
 #define EXIT_SECCOMP_FAIL 125
 #define EXIT_EXEC_FAIL 127
+#define EXIT_NS_FAIL 125
 
-/* 添加 seccomp 规则：失败则打印并退出。
- * libseccomp 原型：seccomp_rule_add(ctx, action, syscall, arg_cnt, ...)
- * arg_cnt=0 表示无参数过滤；带过滤时传入 arg_cnt + SCMP_A* 宏。
- */
 #define ADD_RULE0(ctx, act, call) \
     do { \
         if (seccomp_rule_add(ctx, act, call, 0) != 0) { \
@@ -70,7 +76,174 @@
         } \
     } while (0)
 
-/* 黑名单模式：默认放行 + 定向拒绝（历史行为，保持不变） */
+/* ============ 工具 ============ */
+
+static int mkdir_p(const char *root, const char *rel) {
+    char buf[4096];
+    if (snprintf(buf, sizeof(buf), "%s%s%s", root,
+                 rel[0] == '/' ? "" : "/", rel) >= (int)sizeof(buf)) {
+        return -1;
+    }
+    for (char *p = buf + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+            *p = '/';
+        }
+    }
+    if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+    return 0;
+}
+
+static int bind_ro(const char *src, const char *dst) {
+    if (mount(src, dst, NULL, MS_BIND | MS_REC, NULL) != 0) return -1;
+    if (mount(NULL, dst, NULL, MS_BIND | MS_REC | MS_REMOUNT | MS_RDONLY, NULL) != 0) return -1;
+    return 0;
+}
+
+static int bind_file_ro(const char *src, const char *dst) {
+    if (mount(src, dst, NULL, MS_BIND, NULL) != 0) return -1;
+    if (mount(NULL, dst, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY, NULL) != 0) return -1;
+    return 0;
+}
+
+/* ============ namespaces + jail（SB_NS=1，root） ============ */
+
+static const char *const ETC_FILES[] = {
+    "ld.so.cache", "ld.so.conf", "nsswitch.conf", "hosts",
+    "passwd", "group", "resolv.conf", "localtime", NULL,
+};
+
+static int setup_ns_jail(void) {
+    const char *newroot = getenv("SB_NS_NEWROOT");
+    const char *dirs_ro = getenv("SB_NS_DIRS_RO");
+    char workdir_buf[4096];
+    const char *workdir = getcwd(workdir_buf, sizeof(workdir_buf)); /* Popen 已把 cwd 设为判题工作目录 */
+    char path[4096];
+
+    if (!newroot || !*newroot || !workdir) {
+        fprintf(stderr, "sandbox_netblock: SB_NS requires SB_NS_NEWROOT and a valid cwd\n");
+        return -1;
+    }
+
+    /* 空网络栈（判题无需网络；loopback 也不提供） */
+    if (unshare(CLONE_NEWNET) != 0) { perror("sandbox_netblock: unshare(NET)"); return -1; }
+    /* 新 PID 空间：本进程成为 ns 内 PID 1，宿主进程不可见/不可寻址 */
+    if (unshare(CLONE_NEWPID) != 0) { perror("sandbox_netblock: unshare(PID)"); return -1; }
+    /* 独立挂载表并私有化，避免挂载事件泄漏回宿主 */
+    if (unshare(CLONE_NEWNS) != 0) { perror("sandbox_netblock: unshare(MOUNT)"); return -1; }
+    if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0) {
+        perror("sandbox_netblock: mount(/ private)");
+        return -1;
+    }
+
+    /* jail 根：tmpfs（内存盘，NOSUID） */
+    if (mount("tmpfs", newroot, "tmpfs", MS_NOSUID, "mode=755,size=65536k") != 0) {
+        perror("sandbox_netblock: mount(tmpfs newroot)");
+        return -1;
+    }
+
+    /* 只读 bind：运行时/动态链接依赖（SB_NS_DIRS_RO，逗号分隔的宿主绝对路径） */
+    if (dirs_ro && *dirs_ro) {
+        char buf[2048];
+        if (snprintf(buf, sizeof(buf), "%s", dirs_ro) >= (int)sizeof(buf)) return -1;
+        for (char *tok = strtok(buf, ","); tok; tok = strtok(NULL, ",")) {
+            const char *rel = tok[0] == '/' ? tok + 1 : tok;
+            if (mkdir_p(newroot, rel) != 0) { perror("sandbox_netblock: mkdir skel"); return -1; }
+            if (snprintf(path, sizeof(path), "%s/%s", newroot, rel) >= (int)sizeof(path)) return -1;
+            if (bind_ro(tok, path) != 0) {
+                fprintf(stderr, "sandbox_netblock: bind_ro %s: %s\n", tok, strerror(errno));
+                return -1;
+            }
+        }
+    }
+
+    /* /etc 最小文件集（RO）：loader 缓存与名称解析；/etc/shadow 等一律不可见 */
+    if (mkdir_p(newroot, "etc") != 0) { perror("sandbox_netblock: mkdir etc"); return -1; }
+    for (int i = 0; ETC_FILES[i]; i++) {
+        char src[256], dst[4096];
+        if (snprintf(src, sizeof(src), "/etc/%s", ETC_FILES[i]) >= (int)sizeof(src)) continue;
+        if (snprintf(dst, sizeof(dst), "%s/etc/%s", newroot, ETC_FILES[i]) >= (int)sizeof(dst)) continue;
+        struct stat st;
+        if (stat(src, &st) != 0) continue; /* 宿主没有该文件则跳过 */
+        if (bind_file_ro(src, dst) != 0) {
+            fprintf(stderr, "sandbox_netblock: bind %s: %s\n", src, strerror(errno));
+            return -1;
+        }
+    }
+
+    /* 判题工作目录：按原路径 RW bind（argv 里的绝对路径在 jail 内保持有效） */
+    {
+        const char *rel = workdir[0] == '/' ? workdir + 1 : workdir;
+        if (mkdir_p(newroot, rel) != 0) { perror("sandbox_netblock: mkdir workdir"); return -1; }
+        if (snprintf(path, sizeof(path), "%s/%s", newroot, rel) >= (int)sizeof(path)) return -1;
+        if (mount(workdir, path, NULL, MS_BIND, NULL) != 0) {
+            perror("sandbox_netblock: bind workdir");
+            return -1;
+        }
+    }
+
+    /* /tmp：独立 tmpfs（NOSUID, 1777），与其他判题/宿主隔离 */
+    if (mkdir_p(newroot, "tmp") != 0) { perror("sandbox_netblock: mkdir tmp"); return -1; }
+    if (snprintf(path, sizeof(path), "%s/tmp", newroot) >= (int)sizeof(path)) return -1;
+    if (mount("tmpfs", path, "tmpfs", MS_NOSUID, "mode=1777,size=131072k") != 0) {
+        perror("sandbox_netblock: mount(tmpfs /tmp)");
+        return -1;
+    }
+
+    /* /dev：tmpfs + 最小设备节点 */
+    if (mkdir_p(newroot, "dev") != 0) { perror("sandbox_netblock: mkdir dev"); return -1; }
+    if (snprintf(path, sizeof(path), "%s/dev", newroot) >= (int)sizeof(path)) return -1;
+    if (mount("tmpfs", path, "tmpfs", MS_NOSUID, "mode=755,size=4096k") != 0) {
+        perror("sandbox_netblock: mount(tmpfs /dev)");
+        return -1;
+    }
+    {
+        struct { const char *name; dev_t dev; } nodes[] = {
+            { "null", makedev(1, 3) }, { "zero", makedev(1, 5) },
+            { "random", makedev(1, 8) }, { "urandom", makedev(1, 9) },
+        };
+        for (size_t i = 0; i < sizeof(nodes) / sizeof(nodes[0]); i++) {
+            if (snprintf(path, sizeof(path), "%s/dev/%s", newroot, nodes[i].name) >= (int)sizeof(path)) return -1;
+            if (mknod(path, S_IFCHR | 0666, nodes[i].dev) != 0 && errno != EEXIST) {
+                perror("sandbox_netblock: mknod");
+                return -1;
+            }
+        }
+    }
+
+    /* /proc：在新 PID ns 内挂载，用户代码只见 ns 内进程 */
+    if (mkdir_p(newroot, "proc") != 0) { perror("sandbox_netblock: mkdir proc"); return -1; }
+    if (snprintf(path, sizeof(path), "%s/proc", newroot) >= (int)sizeof(path)) return -1;
+    if (mount("proc", path, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) != 0) {
+        perror("sandbox_netblock: mount(proc)");
+        return -1;
+    }
+
+    /* 切根（cwd 为判题工作目录，已在 jail 内按原路径 RW bind，chroot 后仍有效） */
+    if (chroot(newroot) != 0) { perror("sandbox_netblock: chroot"); return -1; }
+    if (chdir("/") != 0) { perror("sandbox_netblock: chdir"); return -1; }
+    return 0;
+}
+
+/* jail 内降权：清补充组 → setgid → setuid（SB_UID/SB_GID） */
+static int drop_to_sandbox(void) {
+    const char *uid_s = getenv("SB_UID");
+    const char *gid_s = getenv("SB_GID");
+    if (!uid_s || !gid_s) {
+        fprintf(stderr, "sandbox_netblock: SB_NS requires SB_UID/SB_GID\n");
+        return -1;
+    }
+    uid_t uid = (uid_t)atoi(uid_s);
+    gid_t gid = (gid_t)atoi(gid_s);
+    if (setgroups(0, NULL) != 0) { perror("sandbox_netblock: setgroups"); return -1; }
+    if (setgid(gid) != 0) { perror("sandbox_netblock: setgid"); return -1; }
+    if (setuid(uid) != 0) { perror("sandbox_netblock: setuid"); return -1; }
+    return 0;
+}
+
+/* ============ seccomp（黑名单 / 白名单） ============ */
+
 static int install_blacklist(void) {
     scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
     if (ctx == NULL) {
@@ -79,54 +252,42 @@ static int install_blacklist(void) {
     }
 
     /* ===== 网络隔离 ===== */
-    /* 阻止 IPv4/IPv6 socket（含 loopback），判题代码无法连接任何网络 */
     ADD_RULE_N(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
                SCMP_A0(SCMP_CMP_EQ, AF_INET));
     ADD_RULE_N(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
                SCMP_A0(SCMP_CMP_EQ, AF_INET6));
-    /* 阻止 AF_NETLINK：INET_DIAG 可枚举本机所有监听端口（内网拓扑侦察） */
     ADD_RULE_N(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
                SCMP_A0(SCMP_CMP_EQ, AF_NETLINK));
 
     /* ===== 调试防护 ===== */
-    /* 阻止 ptrace：防止调试器附加、代码注入、进程内存读取 */
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(ptrace));
 
     /* ===== 文件系统防护 ===== */
-    /* 阻止 mount/umount2：防止容器逃逸、文件系统挂载篡改 */
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(mount));
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(umount2));
 
     /* ===== 系统稳定性 ===== */
-    /* 阻止 reboot/kexec_load：防止系统重启、内核替换 */
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(reboot));
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(kexec_load));
 
     /* ===== 内核攻击面缩减 ===== */
-    /* 阻止 io_uring：已知有多个内核提权 CVE（CVE-2023-xxxx 系列） */
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(io_uring_setup));
-    /* 阻止 bpf：防止内核可编程（BPF 提权 CVE 如 CVE-2021-3490） */
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(bpf));
-    /* 阻止 userfaultfd：已知内核提权向量（CVE-2019-11599 等） */
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(userfaultfd));
 
     /* ===== 进程间内存隔离 ===== */
-    /* 阻止 process_vm_readv/writev：防止跨进程内存读写（配合 ptrace 封锁） */
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(process_vm_readv));
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(process_vm_writev));
 
     /* ===== 侧信道防护 ===== */
-    /* 阻止 perf_event_open：防止 CPU 性能监控（侧信道攻击向量） */
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(perf_event_open));
 
     /* ===== 权限限制 ===== */
-    /* 阻止 acct（进程记账）、ioperm/iopl（端口 I/O） */
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(acct));
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(ioperm));
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(iopl));
 
     /* ===== 交换分区 ===== */
-    /* 阻止 swapon/swapoff：防止交换分区操作 */
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(swapon));
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(swapoff));
 
@@ -139,8 +300,6 @@ static int install_blacklist(void) {
     return 0;
 }
 
-/* 白名单模式：按名放行；名单外默认 EPERM。
- * 返回 0 成功；-1 失败（调用方以 EXIT_SECCOMP_FAIL 退出，fail-closed）。 */
 static int install_whitelist(const char *profile) {
     const char *const *list = NULL;
     for (size_t i = 0; i < sizeof(SB_PROFILES) / sizeof(SB_PROFILES[0]); i++) {
@@ -150,7 +309,6 @@ static int install_whitelist(const char *profile) {
         }
     }
     if (list == NULL) {
-        /* 未知 profile：拒绝执行用户代码（fail-closed），绝不静默回退黑名单 */
         fprintf(stderr,
                 "sandbox_netblock: unknown SB_PROFILE '%s'; refuse to judge (fail-closed)\n",
                 profile);
@@ -167,7 +325,6 @@ static int install_whitelist(const char *profile) {
     for (; *list != NULL; list++) {
         int nr = seccomp_syscall_resolve_name(*list);
         if (nr < 0) {
-            /* 该内核/架构无此 syscall：不存在即无攻击面，跳过（有 warning 便于名单复核） */
             fprintf(stderr, "sandbox_netblock: skip syscall not on this kernel: %s\n", *list);
             skipped++;
             continue;
@@ -179,8 +336,7 @@ static int install_whitelist(const char *profile) {
         }
     }
 
-    /* socket 特例：名单模式不整体放行 socket，仅允许 AF_UNIX 域
-     * （AF_INET/AF_INET6/AF_NETLINK 维持默认 EPERM，网络隔离语义不变） */
+    /* socket 特例：仅允许 AF_UNIX 域（AF_INET/AF_INET6/AF_NETLINK 默认 EPERM） */
     if (seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(socket), 1,
                          SCMP_A0(SCMP_CMP_EQ, AF_UNIX)) != 0) {
         perror("sandbox_netblock: allow rule socket(AF_UNIX)");
@@ -201,24 +357,54 @@ static int install_whitelist(const char *profile) {
     return 0;
 }
 
+static int install_seccomp(void) {
+    const char *profile = getenv("SB_PROFILE");
+    if (profile != NULL && profile[0] != '\0') {
+        return install_whitelist(profile);
+    }
+    return install_blacklist();
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         return 2;
     }
 
-    /* 非特权进程加载 seccomp filter 前必须设置 no_new_privs（阻止 exec 提权） */
-    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
-        perror("sandbox_netblock: prctl(NO_NEW_PRIVS)");
+    const char *ns = getenv("SB_NS");
+    if (ns != NULL && ns[0] != '\0') {
+        /* ns 模式要求 root（需要 CAP_SYS_ADMIN 做 unshare/mount/chroot/mknod） */
+        if (geteuid() != 0) {
+            fprintf(stderr, "sandbox_netblock: SB_NS requires root; refuse (fail-closed)\n");
+            return EXIT_NS_FAIL;
+        }
+        if (setup_ns_jail() != 0) {
+            return EXIT_NS_FAIL;
+        }
+        if (drop_to_sandbox() != 0) {
+            return EXIT_NS_FAIL;
+        }
+    } else {
+        /* 历史路径：helper 已 setuid 到 sandbox 用户，本工具仅做 seccomp。
+         * 非特权进程加载 seccomp filter 前必须设置 no_new_privs */
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+            perror("sandbox_netblock: prctl(NO_NEW_PRIVS)");
+            return EXIT_SECCOMP_FAIL;
+        }
+    }
+
+    if (install_seccomp() != 0) {
         return EXIT_SECCOMP_FAIL;
     }
 
-    const char *profile = getenv("SB_PROFILE");
-    if (profile != NULL && profile[0] != '\0') {
-        if (install_whitelist(profile) != 0) {
-            return EXIT_SECCOMP_FAIL;
-        }
-    } else {
-        if (install_blacklist() != 0) {
+    /* ns 模式且无 cgroup 时：NPROC 兜底（降权后设置；多 worker 全局计数的老
+     * 限制仍存在——生产应启用 cgroup pids.max，这里保持与历史行为同级的防护） */
+    const char *cg = getenv("SB_CGROUP");
+    const char *nproc_s = getenv("SB_NPROC");
+    if ((ns != NULL && ns[0] != '\0') && (cg == NULL || cg[0] == '\0') &&
+        nproc_s != NULL && nproc_s[0] != '\0') {
+        struct rlimit rl = { (rlim_t)atoi(nproc_s), (rlim_t)atoi(nproc_s) };
+        if (setrlimit(RLIMIT_NPROC, &rl) != 0) {
+            perror("sandbox_netblock: setrlimit NPROC");
             return EXIT_SECCOMP_FAIL;
         }
     }
