@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -157,15 +158,21 @@ def test_whitelist_unknown_profile_fails_closed(tmp_path: Path):
     reason="need root + netblock + sandbox user + gcc",
 )
 def test_whitelist_c_binary_runs(tmp_path: Path):
-    src = tmp_path / "hello.c"
-    src.write_text("#include <stdio.h>\nint main(void){printf(\"HELLO_WL_C\\n\");return 0;}\n",
-                   encoding="utf-8")
-    exe = tmp_path / "hello"
-    subprocess.run(["gcc", "-O2", "-o", str(exe), str(src)], check=True, timeout=60)
-    # pytest 的 tmp_path 属 root 且 0700：sandbox 用户需能穿越目录才能 execve
-    os.chmod(tmp_path, 0o755)
-    proc = _run_helper_cmd([str(exe)], env_extra={"SB_PROFILE": "c"})
-    assert "HELLO_WL_C" in (proc.stdout or ""), f"rc={proc.returncode} err={proc.stderr[-500:]}"
+    # pytest 的 tmp_path 目录链属 root 且 0700，sandbox 用户无法穿越 → execve EACCES；
+    # 改用 /tmp（1777）下的专用目录并放权
+    workdir = tempfile.mkdtemp(prefix="sb-wl-c-")
+    try:
+        os.chmod(workdir, 0o755)
+        src = Path(workdir) / "hello.c"
+        src.write_text("#include <stdio.h>\nint main(void){printf(\"HELLO_WL_C\\n\");return 0;}\n",
+                       encoding="utf-8")
+        exe = Path(workdir) / "hello"
+        subprocess.run(["gcc", "-O2", "-o", str(exe), str(src)], check=True, timeout=60)
+        os.chmod(exe, 0o755)
+        proc = _run_helper_cmd([str(exe)], env_extra={"SB_PROFILE": "c"})
+        assert "HELLO_WL_C" in (proc.stdout or ""), f"rc={proc.returncode} err={proc.stderr[-500:]}"
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 @pytest.mark.skipif(
