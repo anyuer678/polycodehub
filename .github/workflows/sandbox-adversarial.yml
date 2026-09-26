@@ -73,6 +73,21 @@ jobs:
           sudo chmod 755 /usr/local/bin/sandbox_netblock
           test -x /usr/local/bin/sandbox_netblock
 
+      - name: NS jail debug probe (strace the failing exec)
+        run: |
+          set -x
+          sudo gcc -O2 -o /tmp/sb_nb services/judge-service-python/sandbox_netblock.c -lseccomp
+          NR=$(mktemp -d); WD=$(mktemp -d); chmod 755 $WD
+          sudo -E env SB_NS=1 SB_NS_NEWROOT=$NR SB_NS_DIRS_RO="/usr,/lib,/lib64,/bin" \
+            SB_UID=1002 SB_GID=1001 SANDBOX_NETBLOCK=/tmp/sb_nb PATH=$PATH \
+            strace -f -o /tmp/ns.log /tmp/sb_nb /usr/bin/python3 -c "print('nsok')" || true
+          grep -E "execve|chroot|mount" /tmp/ns.log | tail -15 || true
+          echo "--- jail contents ---"
+          sudo ls $NR/usr/bin 2>/dev/null | head -4 || true
+          sudo ls -la $NR/lib64 2>/dev/null | head -5 || true
+          sudo ls -la $NR/lib 2>/dev/null | head -5 || true
+          rm -rf $NR $WD /tmp/ns.log
+
       - name: Install pytest
         run: pip install pytest
 
