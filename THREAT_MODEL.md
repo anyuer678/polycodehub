@@ -103,6 +103,22 @@ Honesty section — what this deployment does **not** claim:
 - Full containerized escape-testing requires Docker; see
   `docs/SANDBOX_TESTING.md` and the repository's disclosed follow-up item.
 
+### 3.1.1 Opt-in seccomp whitelist layer (added 2026-09)
+
+- `sandbox_netblock` gains a second mode selected by `SB_PROFILE` (engine
+  opt-in via `JUDGE_SECCOMP_WHITELIST=1`): default-deny filter, allow-list
+  per language profile from `sandbox_profiles.h`, `socket` restricted to
+  AF_UNIX by argument filtering, unknown profile exits 125 (fail-closed).
+- Mitigation class: S3.1/T1 (arbitrary syscall surface) — reduces the
+  allowed syscall set from "everything minus a denylist" to
+  "an explicit, reviewable allowlist". Legacy denylist mode remains the
+  default until profiles are regenerated from strace on the target image.
+- Status: curated bootstrap profiles are CI-tested for c / python / node
+  run paths (`tests/sandbox_adversarial/test_whitelist.py`); java /
+  build-java are experimental and NOT yet CI-proven — enabling the mode
+  in production requires regenerating profiles via
+  `scripts/trace_syscalls.sh` + running the E2E language matrix first.
+
 ## 6. Reporting
 
 See [SECURITY.md](SECURITY.md). Please do not open public issues for

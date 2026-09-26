@@ -2,9 +2,21 @@
  * sandbox_netblock：判题沙箱安全隔离工具。
  *
  * 用法: sandbox_netblock <cmd...>
- * 在 exec 用户代码前设置 seccomp filter，阻止危险系统调用。
+ * 在 exec 用户代码前设置 seccomp filter。
  *
- * 阻止列表（纵深防御，在 setuid 降权 + rlimit 之上的第二层）：
+ * 双模式（由环境变量 SB_PROFILE 选择）：
+ *
+ * 1) SB_PROFILE 未设置（默认）——黑名单模式，行为与历史版本完全一致：
+ *    默认放行，定向阻止危险 syscall（网络/调试/挂载/内核攻击面等）。
+ *
+ * 2) SB_PROFILE=<name>（opt-in，需 engine 侧 JUDGE_SECCOMP_WHITELIST=1）——白名单模式：
+ *    默认拒绝（SCMP_ACT_ERRNO(EPERM)），仅放行 sandbox_profiles.h 中对应 profile
+ *    的名单（BASELINE ∪ 该语言增集）+ 一条带参数过滤的 socket 规则（仅 AF_UNIX 域）。
+ *    - profile 名单外的 syscall 一律 EPERM；
+ *    - 未知名单（SB_PROFILE 值不在 SB_PROFILES 内）→ 直接退出 125（fail-closed）；
+ *    - 名单内但目标内核不存在的 syscall → 跳过并打 warning（不存在即无攻击面）。
+ *
+ * 黑名单阻止列表（纵深防御，在 setuid 降权 + rlimit 之上的第二层）：
  *   网络：AF_INET / AF_INET6 / AF_NETLINK socket（判题无需网络）
  *   调试：ptrace（防止调试器附加 / 代码注入 / 进程内存读取）
  *   文件系统：mount / umount2（防止容器逃逸 / 文件系统篡改）
@@ -21,15 +33,19 @@
  * 先设置 no_new_privs 再加载 filter（非特权进程的要求），之后 execvp
  * 用户代码，seccomp filter 在 exec 后保留。
  *
- * 编译（Dockerfile）: gcc -O2 -o /usr/local/bin/sandbox_netblock sandbox_netblock.c -lseccomp
+ * 编译（Dockerfile/CI）: gcc -O2 -o sandbox_netblock sandbox_netblock.c -lseccomp
  */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <seccomp.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#include "sandbox_profiles.h"
 
 #define EXIT_SECCOMP_FAIL 125
 #define EXIT_EXEC_FAIL 127
@@ -54,21 +70,12 @@
         } \
     } while (0)
 
-int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        return 2;
-    }
-
-    /* 非特权进程加载 seccomp filter 前必须设置 no_new_privs（阻止 exec 提权） */
-    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
-        perror("sandbox_netblock: prctl(NO_NEW_PRIVS)");
-        return EXIT_SECCOMP_FAIL;
-    }
-
+/* 黑名单模式：默认放行 + 定向拒绝（历史行为，保持不变） */
+static int install_blacklist(void) {
     scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
     if (ctx == NULL) {
         perror("sandbox_netblock: seccomp_init");
-        return EXIT_SECCOMP_FAIL;
+        return -1;
     }
 
     /* ===== 网络隔离 ===== */
@@ -125,9 +132,96 @@ int main(int argc, char *argv[]) {
 
     if (seccomp_load(ctx) != 0) {
         perror("sandbox_netblock: seccomp_load");
-        return EXIT_SECCOMP_FAIL;
+        seccomp_release(ctx);
+        return -1;
     }
     seccomp_release(ctx);
+    return 0;
+}
+
+/* 白名单模式：按名放行；名单外默认 EPERM。
+ * 返回 0 成功；-1 失败（调用方以 EXIT_SECCOMP_FAIL 退出，fail-closed）。 */
+static int install_whitelist(const char *profile) {
+    const char *const *list = NULL;
+    for (size_t i = 0; i < sizeof(SB_PROFILES) / sizeof(SB_PROFILES[0]); i++) {
+        if (strcmp(SB_PROFILES[i].name, profile) == 0) {
+            list = SB_PROFILES[i].syscalls;
+            break;
+        }
+    }
+    if (list == NULL) {
+        /* 未知 profile：拒绝执行用户代码（fail-closed），绝不静默回退黑名单 */
+        fprintf(stderr,
+                "sandbox_netblock: unknown SB_PROFILE '%s'; refuse to judge (fail-closed)\n",
+                profile);
+        return -1;
+    }
+
+    scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ERRNO(EPERM));
+    if (ctx == NULL) {
+        perror("sandbox_netblock: seccomp_init(whitelist)");
+        return -1;
+    }
+
+    int skipped = 0;
+    for (; *list != NULL; list++) {
+        int nr = seccomp_syscall_resolve_name(*list);
+        if (nr < 0) {
+            /* 该内核/架构无此 syscall：不存在即无攻击面，跳过（有 warning 便于名单复核） */
+            fprintf(stderr, "sandbox_netblock: skip syscall not on this kernel: %s\n", *list);
+            skipped++;
+            continue;
+        }
+        if (seccomp_rule_add(ctx, SCMP_ACT_ALLOW, nr, 0) != 0) {
+            fprintf(stderr, "sandbox_netblock: allow rule %s failed\n", *list);
+            seccomp_release(ctx);
+            return -1;
+        }
+    }
+
+    /* socket 特例：名单模式不整体放行 socket，仅允许 AF_UNIX 域
+     * （AF_INET/AF_INET6/AF_NETLINK 维持默认 EPERM，网络隔离语义不变） */
+    if (seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(socket), 1,
+                         SCMP_A0(SCMP_CMP_EQ, AF_UNIX)) != 0) {
+        perror("sandbox_netblock: allow rule socket(AF_UNIX)");
+        seccomp_release(ctx);
+        return -1;
+    }
+
+    if (seccomp_load(ctx) != 0) {
+        perror("sandbox_netblock: seccomp_load(whitelist)");
+        seccomp_release(ctx);
+        return -1;
+    }
+    seccomp_release(ctx);
+    if (skipped > 0) {
+        fprintf(stderr, "sandbox_netblock: whitelist '%s' loaded (%d names skipped as unknown)\n",
+                profile, skipped);
+    }
+    return 0;
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        return 2;
+    }
+
+    /* 非特权进程加载 seccomp filter 前必须设置 no_new_privs（阻止 exec 提权） */
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+        perror("sandbox_netblock: prctl(NO_NEW_PRIVS)");
+        return EXIT_SECCOMP_FAIL;
+    }
+
+    const char *profile = getenv("SB_PROFILE");
+    if (profile != NULL && profile[0] != '\0') {
+        if (install_whitelist(profile) != 0) {
+            return EXIT_SECCOMP_FAIL;
+        }
+    } else {
+        if (install_blacklist() != 0) {
+            return EXIT_SECCOMP_FAIL;
+        }
+    }
 
     execvp(argv[1], &argv[1]);
     perror("sandbox_netblock: execvp");

@@ -54,6 +54,13 @@ COMPILE_MAX_PROCESSES_JVM = 64  # javac 本身是 JVM
 MAX_OPEN_FILES = 64
 
 
+# seccomp 白名单模式（opt-in）：JUDGE_SECCOMP_WHITELIST ∈ {1,true,yes} 时，判题子进程
+# 经 SB_PROFILE 告知 sandbox_netblock 走白名单（默认关闭=黑名单模式，行为与历史完全一致）。
+# 白名单名单见 sandbox_profiles.h；java/build-java 为 experimental，启用前须在目标环境
+# 先跑通 E2E 语言矩阵（见 docs/SANDBOX_TESTING.md「白名单模式」）。
+WHITELIST_ENABLED = os.environ.get("JUDGE_SECCOMP_WHITELIST", "").strip().lower() in {"1", "true", "yes"}
+
+
 def _runtime_nproc(language: str) -> int:
     lang = (language or "").lower()
     if lang in {"java"}:
@@ -102,9 +109,10 @@ def _ensure_work_root() -> str:
 
 
 def _setpriv_cmd(args: list[str], as_limit_kb: int, cpu_s: int,
-                 fsize_kb: int, nproc: int, nofile: int) -> list[str]:
+                 fsize_kb: int, nproc: int, nofile: int, sb_profile: str = "") -> list[str]:
     """经 sandbox_helper 降权执行：root 设置 rlimit 后 setuid 到 sandbox 再 exec。
-    helper 路径由 engine 所在目录解析；限制参数经环境变量 SB_* 传入。"""
+    helper 路径由 engine 所在目录解析；限制参数经环境变量 SB_* 传入。
+    sb_profile 非空且 WHITELIST_ENABLED 时额外传 SB_PROFILE，netblock 走白名单模式。"""
     helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sandbox_helper.py")
     env = dict(SANDBOX_ENV)
     env.update({
@@ -114,6 +122,8 @@ def _setpriv_cmd(args: list[str], as_limit_kb: int, cpu_s: int,
         "SB_NPROC": str(nproc),
         "SB_NOFILE": str(nofile),
     })
+    if sb_profile and WHITELIST_ENABLED:
+        env["SB_PROFILE"] = sb_profile
     return [sys.executable, helper, *args], env
 
 
@@ -314,7 +324,8 @@ class RealJudgeEngine(JudgeEngine):
         return "".join(out_chunks), "".join(err_chunks)
 
     def _run_subprocess(self, args: list[str], input_data: str, start: float, extra_env: dict | None = None,
-                        cwd: Optional[str] = None, as_limit_kb: int = AS_LIMIT_KB_DEFAULT) -> _RunResult:
+                        cwd: Optional[str] = None, as_limit_kb: int = AS_LIMIT_KB_DEFAULT,
+                        sb_profile: str = "") -> _RunResult:
         """统一执行沙箱子进程：sandbox_helper 降权到 sandbox + 清洗环境 + 资源限制，
         使用 start_new_session 创建独立进程组，超时时向整个进程组发 SIGKILL。"""
         cmd, cmd_env = _setpriv_cmd(
@@ -324,6 +335,7 @@ class RealJudgeEngine(JudgeEngine):
             fsize_kb=MAX_FILE_SIZE_KB,
             nproc=self._nproc_for(args),
             nofile=MAX_OPEN_FILES,
+            sb_profile=sb_profile,
         )
         if extra_env:
             cmd_env.update(extra_env)
@@ -388,7 +400,7 @@ class RealJudgeEngine(JudgeEngine):
 
     def _run_python(self, source: str, input_data: str, start: float) -> _RunResult:
         python_bin = shutil.which("python3") or "python"
-        return self._run_subprocess([python_bin, "-c", source], input_data, start)
+        return self._run_subprocess([python_bin, "-c", source], input_data, start, sb_profile="python")
 
     def _run_node(self, source: str, input_data: str, start: float) -> _RunResult:
         # 限制 V8 堆上限，避免 Node 默认堆把虚拟内存吃满
@@ -397,21 +409,24 @@ class RealJudgeEngine(JudgeEngine):
             input_data,
             start,
             extra_env={"UV_THREADPOOL_SIZE": "2", "NODE_OPTIONS": "--max-old-space-size=256"},
+            sb_profile="node",
         )
 
     def _run_binary(self, exe: str, input_data: str, start: float, cwd: str) -> _RunResult:
-        return self._run_subprocess([exe], input_data, start, cwd=cwd)
+        return self._run_subprocess([exe], input_data, start, cwd=cwd, sb_profile="c")
 
     def _run_compile(self, args: list[str], cwd: str) -> tuple[int, str, str]:
         """编译子进程：同样降权到 sandbox + 清洗环境。
         编译放宽内存（编译器需要更多资源）与文件大小，仅设 CPU 超时。"""
+        joined = " ".join(args).lower()
         cmd, cmd_env = _setpriv_cmd(
             args,
             as_limit_kb=AS_LIMIT_KB_JAVA,
             cpu_s=COMPILE_TIMEOUT_S,
             fsize_kb=MAX_FILE_SIZE_KB * 2,
-            nproc=COMPILE_MAX_PROCESSES_JVM if any(x in " ".join(args).lower() for x in ("javac", "java")) else COMPILE_MAX_PROCESSES,
+            nproc=COMPILE_MAX_PROCESSES_JVM if any(x in joined for x in ("javac", "java")) else COMPILE_MAX_PROCESSES,
             nofile=MAX_OPEN_FILES,
+            sb_profile="build-java" if "javac" in joined else "build-c",
         )
         proc = subprocess.Popen(
             cmd,
@@ -522,6 +537,7 @@ class RealJudgeEngine(JudgeEngine):
                 start,
                 cwd=tmp,
                 as_limit_kb=AS_LIMIT_KB_JAVA,
+                sb_profile="java",
             )
 
 
