@@ -229,9 +229,8 @@ static int setup_ns_jail(void) {
         return -1;
     }
 
-    /* 切根（cwd 为判题工作目录，已在 jail 内按原路径 RW bind，chroot 后仍有效） */
-    if (chroot(newroot) != 0) { perror("sandbox_netblock: chroot"); return -1; }
-    if (chdir("/") != 0) { perror("sandbox_netblock: chdir"); return -1; }
+    /* jail 构建完成。chroot 由 fork 出的【ns 内 PID 1】子进程执行——
+     * CLONE_NEWPID 的 PID 1 是 fork 后的子进程而非调用者（见 main）。 */
     return 0;
 }
 
