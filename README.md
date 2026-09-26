@@ -8,6 +8,7 @@
 [![Java](https://img.shields.io/badge/Java-21-orange)](https://www.java.com/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)](https://www.docker.com/)
 [![CI](https://github.com/anyuer678/polycodehub/actions/workflows/ci.yml/badge.svg)](https://github.com/anyuer678/polycodehub/actions/workflows/ci.yml)
+[![sandbox-adversarial](https://github.com/anyuer678/polycodehub/actions/workflows/sandbox-adversarial.yml/badge.svg)](https://github.com/anyuer678/polycodehub/actions/workflows/sandbox-adversarial.yml)
 
 **全栈在线判题（OJ）平台** — 开发者社区 + 代码评测 + 排行榜 + 管理后台 + 异步任务链路。
 
@@ -86,7 +87,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start.ps1
 ### 方式 B：手动命令
 
 ```bash
-copy infra\docker\.env.example infra\docker\.env
+# Windows（cmd/powershell）用 copy，Linux/macOS 用 cp
+cp infra/docker/.env.example infra/docker/.env
 docker compose -f infra/docker/docker-compose.yml --env-file infra/docker/.env up -d --build
 ```
 
@@ -141,6 +143,10 @@ polycodehub/
 本项目按 **GPL-3.0** 协议以"现状"（AS IS）提供，作者与贡献者**不对使用本项目产生的任何直接、间接、偶然或后果性损失负责**，包括但不限于：实际生产/生活环境中的业务故障、数据丢失、服务中断、安全事件等任何恶劣结果。若需将本项目用于实际生产或业务场景，请自行充分评估风险，并**按需修改代码以满足你的实际需求**；任何因使用本项目（含修改后版本）造成的影响，均由使用者自行承担。
 
 **安全声明**：判题沙箱为进程级纵深防御（setuid + seccomp 黑名单/白名单 + cgroup v2 + namespaces/chroot + rlimit，各层 opt-in 可独立降级），**非容器级隔离**，未按生产级多租户威胁模型审计；演进记录与未修复项见 [THREAT_MODEL.md](THREAT_MODEL.md)。隐藏测试用例已从 API 查询层脱敏，但数据库中仍保留供管理员审计。自研安全机制需结合实际部署场景独立评估。
+
+## 参与贡献
+
+欢迎 Issue 与 PR——流程与约定见 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请勿公开 issue，走 [SECURITY.md](SECURITY.md) 的私密报告渠道。
 
 ## 协议
 

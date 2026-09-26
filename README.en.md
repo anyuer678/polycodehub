@@ -9,6 +9,7 @@
 [![Java](https://img.shields.io/badge/Java-21-orange)](https://www.java.com/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)](https://www.docker.com/)
 [![CI](https://github.com/anyuer678/polycodehub/actions/workflows/ci.yml/badge.svg)](https://github.com/anyuer678/polycodehub/actions/workflows/ci.yml)
+[![sandbox-adversarial](https://github.com/anyuer678/polycodehub/actions/workflows/sandbox-adversarial.yml/badge.svg)](https://github.com/anyuer678/polycodehub/actions/workflows/sandbox-adversarial.yml)
 
 **A full-stack online judge (OJ) platform** — developer community + code evaluation + leaderboards + admin console + async task pipeline.
 
@@ -87,7 +88,8 @@ The script handles: Docker daemon check → generate `infra\docker\.env` (random
 ### Option B: manual commands
 
 ```bash
-copy infra\docker\.env.example infra\docker\.env
+# Windows（cmd/powershell）用 copy，Linux/macOS 用 cp
+cp infra/docker/.env.example infra/docker/.env
 docker compose -f infra/docker/docker-compose.yml --env-file infra/docker/.env up -d --build
 ```
 
@@ -142,6 +144,10 @@ polycodehub/
 This project is provided "AS IS" under the **GPL-3.0** license; the author and contributors are **not liable for any direct, indirect, incidental, or consequential damages** arising from its use, including but not limited to business failures, data loss, service outages, or security incidents in real production or living environments. If you intend to use this project in production or business scenarios, assess the risks yourself and **modify the code as needed to fit your requirements**; any impact caused by using this project (including modified versions) is borne by the user.
 
 **Security statement**: the judging sandbox uses process-level defense in depth (setuid + seccomp blacklist/allowlist + cgroup v2 + namespaces/chroot + rlimits, each layer independently opt-in with explicit degradation) and is **not container-grade isolation**; it has not been audited against a production multi-tenant threat model. Evolution notes and open items: [THREAT_MODEL.md](THREAT_MODEL.md). Hidden test cases are redacted at the API query layer but retained in the database for admin audit. Self-built security mechanisms must be independently evaluated against your actual deployment scenario.
+
+## Contributing
+
+Issues and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). For security issues, please do not open a public issue; use the private reporting channel in [SECURITY.md](SECURITY.md).
 
 ## License
 
