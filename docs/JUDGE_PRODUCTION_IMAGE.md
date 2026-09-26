@@ -85,7 +85,7 @@ PY
 ## 5. 非目标（诚实）
 
 - **不是** gVisor / Firecracker / 多租户硬隔离
-- seccomp **黑名单**；多租户请换白名单 + 独立 judge 节点
+- seccomp 黑名单（默认）；**白名单已内建**（`JUDGE_SECCOMP_WHITELIST=1`，见下方部署要求）；多租户请换独立 judge 节点 + 容器级隔离
 - 容器网络隔离仍建议 `--network` 自定义 internal 网段
 
 ## 6. 构建示例
