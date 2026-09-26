@@ -16,6 +16,7 @@ try:
 except ImportError:  # Windows local dev
     resource = None  # type: ignore
 
+from .cgroup import CgroupUnavailable, JudgeCgroup, cgroup_v2_available
 from .repository import TestCase, Verdict, fetch_test_cases
 
 # NOTE: 进程级隔离（非容器沙箱）：
@@ -59,6 +60,19 @@ MAX_OPEN_FILES = 64
 # 白名单名单见 sandbox_profiles.h；java/build-java 为 experimental，启用前须在目标环境
 # 先跑通 E2E 语言矩阵（见 docs/SANDBOX_TESTING.md「白名单模式」）。
 WHITELIST_ENABLED = os.environ.get("JUDGE_SECCOMP_WHITELIST", "").strip().lower() in {"1", "true", "yes"}
+
+# cgroup v2 模式（opt-in）：JUDGE_CGROUP=off（默认，仅 rlimit）/ auto（可用即用，否则
+# 静默回退 rlimit）/ 1|true|yes|require（必须，不可用直接抛错——fail-visible）。
+# pids.max 按【判题】隔离 fork 炸弹（修复多 worker 下 RLIMIT_NPROC 按用户计数互相污染），
+# memory.max 硬上限 + memory.peak 含 page cache 的准确计量 + memory.events 的 OOM 证据。
+CGROUP_MODE = {
+    "1": "require", "true": "require", "yes": "require", "require": "require",
+    "auto": "auto",
+}.get(os.environ.get("JUDGE_CGROUP", "off").strip().lower(), "off")
+
+# sandbox_helper 的 cgroup 遥测标记：`__SB_CGROUP__=<peak_kb>,oom=<n>`，
+# 紧贴 __SB_RUSAGE__ 之前（末两行才可信，防用户伪造，与 RUSAGE 同策略）。
+CGROUP_MARKER_RE = re.compile(r"^__SB_CGROUP__=(\d+),oom=(\d+)[ \t]*(?:\r\n|\r|\n)?$")
 
 
 def _runtime_nproc(language: str) -> int:
@@ -109,10 +123,12 @@ def _ensure_work_root() -> str:
 
 
 def _setpriv_cmd(args: list[str], as_limit_kb: int, cpu_s: int,
-                 fsize_kb: int, nproc: int, nofile: int, sb_profile: str = "") -> list[str]:
+                 fsize_kb: int, nproc: int, nofile: int,
+                 sb_profile: str = "", sb_cgroup: str = "") -> list[str]:
     """经 sandbox_helper 降权执行：root 设置 rlimit 后 setuid 到 sandbox 再 exec。
     helper 路径由 engine 所在目录解析；限制参数经环境变量 SB_* 传入。
-    sb_profile 非空且 WHITELIST_ENABLED 时额外传 SB_PROFILE，netblock 走白名单模式。"""
+    sb_profile 非空且 WHITELIST_ENABLED 时额外传 SB_PROFILE，netblock 走白名单模式。
+    sb_cgroup 非空且 CGROUP_MODE 启用时传 SB_CGROUP，helper 附着判题专属 cgroup。"""
     helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sandbox_helper.py")
     env = dict(SANDBOX_ENV)
     env.update({
@@ -124,6 +140,8 @@ def _setpriv_cmd(args: list[str], as_limit_kb: int, cpu_s: int,
     })
     if sb_profile and WHITELIST_ENABLED:
         env["SB_PROFILE"] = sb_profile
+    if sb_cgroup and CGROUP_MODE != "off":
+        env["SB_CGROUP"] = sb_cgroup
     return [sys.executable, helper, *args], env
 
 
@@ -222,25 +240,45 @@ class RealJudgeEngine(JudgeEngine):
 
     @staticmethod
     def _strip_rusage(stderr: str) -> tuple[Optional[int], str]:
-        """解析并剥离 sandbox_helper 写入的 `__SB_RUSAGE__=<kb>` 标记行。
+        """向后兼容包装：仅取 (rusage 峰值, 清洗后 stderr)。"""
+        ru, _, _, cleaned = RealJudgeEngine._parse_sandbox_markers(stderr)
+        return ru, cleaned
 
-        返回 (子进程自身峰值内存 KB, 剥离后的 stderr)。helper 的标记行总是
-        stderr 的最后一行（wait4 之后写入），因此仅当最后一行是标记行时才采信；
-        标记行被输出截断吞掉、或末尾是用户伪造的同名行时返回 (None, stderr)，
-        调用方回退到 _measure() 的累计值。剥离时删除所有匹配行，避免用户伪造
-        的干扰行出现在 RE/CE 输出里。"""
+    @staticmethod
+    def _parse_sandbox_markers(stderr: str) -> tuple[Optional[int], Optional[int], Optional[int], str]:
+        """解析并剥离 sandbox_helper 写入的标记行。
+
+        返回 (ru_maxrss_kb, cgroup_peak_kb, cgroup_oom_kills, 清洗后的 stderr)。
+
+        信任规则（防用户伪造，与历史策略一致）：
+        - `__SB_RUSAGE__=<kb>` 必须是 stderr 最后一行才采信；
+        - `__SB_CGROUP__=<peak>,oom=<n>` 仅当紧贴 rusage 行之前（末两行）才采信；
+        - 用户在子进程里的任何输出都发生在 helper 写标记之前，无法伪造末两行；
+        - 输出被截断（达到 MAX_OUTPUT_CHARS）时标记行必然丢失，一律不采信。"""
         lines = stderr.splitlines(keepends=True)
         if not lines:
-            return None, stderr
+            return None, None, None, stderr
         # 输出达到上限说明读取被截断：helper 的标记行在末尾，必然已丢失或残缺，
-        # 此时最后一行可能是用户伪造的干扰行，一律不采信
+        # 此时末尾可能是用户伪造的干扰行，一律不采信
         if len(stderr) >= MAX_OUTPUT_CHARS:
-            return None, stderr
+            return None, None, None, stderr
         m = RUSAGE_MARKER_RE.match(lines[-1])
         if m is None:
-            return None, stderr
-        cleaned = "".join(line for line in lines if RUSAGE_MARKER_RE.match(line) is None)
-        return int(m.group(1)), cleaned
+            return None, None, None, stderr
+        ru_kb = int(m.group(1))
+        cg_peak: Optional[int] = None
+        cg_oom: Optional[int] = None
+        if len(lines) >= 2:
+            mc = CGROUP_MARKER_RE.match(lines[-2])
+            if mc is not None:
+                cg_peak, cg_oom = int(mc.group(1)), int(mc.group(2))
+        # 所有位置上匹配标记的行一律剥离（用户伪造的中间行不污染 RE/CE 输出），
+        # 但数值只从上面的末尾信任位置读取
+        cleaned = "".join(
+            line for line in lines
+            if RUSAGE_MARKER_RE.match(line) is None and CGROUP_MARKER_RE.match(line) is None
+        )
+        return ru_kb, cg_peak, cg_oom, cleaned
 
     @staticmethod
     def _truncate(text: str) -> str:
@@ -323,57 +361,97 @@ class RealJudgeEngine(JudgeEngine):
             raise
         return "".join(out_chunks), "".join(err_chunks)
 
+    def _maybe_cgroup(self, mem_kb: int, pids: int) -> Optional[JudgeCgroup]:
+        """按 JUDGE_CGROUP 配置创建判题专属 cgroup v2。
+
+        - off（默认）：返回 None，仅 rlimit；
+        - auto：可用即用，不可用打 warning 后回退 rlimit；
+        - require：不可用直接抛 CgroupUnavailable（fail-visible，判题表现为 RE 可见）。"""
+        if CGROUP_MODE == "off":
+            return None
+        try:
+            if not cgroup_v2_available():
+                raise CgroupUnavailable("cgroup v2 unified hierarchy not writable")
+            return JudgeCgroup.create(mem_kb=mem_kb, pids_max=pids, owner_uid=SANDBOX_UID)
+        except CgroupUnavailable as exc:
+            if CGROUP_MODE == "require":
+                raise
+            print(f"[engine] cgroup unavailable (mode=auto), fallback to rlimit-only: {exc}",
+                  file=sys.stderr)
+            return None
+
     def _run_subprocess(self, args: list[str], input_data: str, start: float, extra_env: dict | None = None,
                         cwd: Optional[str] = None, as_limit_kb: int = AS_LIMIT_KB_DEFAULT,
                         sb_profile: str = "") -> _RunResult:
-        """统一执行沙箱子进程：sandbox_helper 降权到 sandbox + 清洗环境 + 资源限制，
+        """统一执行沙箱子进程：sandbox_helper 降权到 sandbox + 清洗环境 + 资源限制
+        （+ cgroup v2 opt-in：pids.max/memory.max 按判题隔离），
         使用 start_new_session 创建独立进程组，超时时向整个进程组发 SIGKILL。"""
-        cmd, cmd_env = _setpriv_cmd(
-            args,
-            as_limit_kb=as_limit_kb,
-            cpu_s=TIME_LIMIT_S,
-            fsize_kb=MAX_FILE_SIZE_KB,
-            nproc=self._nproc_for(args),
-            nofile=MAX_OPEN_FILES,
-            sb_profile=sb_profile,
-        )
-        if extra_env:
-            cmd_env.update(extra_env)
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-            env=cmd_env,
-            cwd=cwd or "/tmp",
-        )
+        nproc = self._nproc_for(args)
+        cg: Optional[JudgeCgroup] = None
         try:
-            stdout, stderr = self._communicate_capped(proc, input_data, TIME_LIMIT_S)
-        except subprocess.TimeoutExpired:
-            return _RunResult(status="TLE", runtime_ms=TIME_LIMIT_S * 1000, error_message=TLE_MSG)
-        runtime_ms, rusage_memory_kb = self._measure(start)
-        # 优先用 helper 报告的【子进程自身】峰值；被输出截断时回退累计值（极端输出场景）
-        sb_memory_kb, stderr = self._strip_rusage(stderr)
-        memory_kb = sb_memory_kb if sb_memory_kb is not None else rusage_memory_kb
-        if proc.returncode != 0:
-            # RLIMIT_CPU 触发 SIGXCPU(24)，RLIMIT_FSIZE 触发 SIGXFSZ(25)
-            if proc.returncode in (-signal.SIGXCPU, signal.SIGXCPU):
-                return _RunResult(status="TLE", runtime_ms=runtime_ms, error_message=TLE_MSG)
-            if memory_kb > MEMORY_LIMIT_KB:
-                return _RunResult(status="MLE", output=self._truncate((stderr or "").strip() or (stdout or "").strip()),
-                                  runtime_ms=runtime_ms, memory_kb=memory_kb, error_message=MLE_MSG)
-            return _RunResult(
-                status="RE",
-                output=self._truncate((stderr or "").strip() or (stdout or "").strip()),
-                runtime_ms=runtime_ms,
-                memory_kb=memory_kb,
+            cg = self._maybe_cgroup(as_limit_kb, nproc)
+            cmd, cmd_env = _setpriv_cmd(
+                args,
+                as_limit_kb=as_limit_kb,
+                cpu_s=TIME_LIMIT_S,
+                fsize_kb=MAX_FILE_SIZE_KB,
+                nproc=nproc,
+                nofile=MAX_OPEN_FILES,
+                sb_profile=sb_profile,
+                sb_cgroup=cg.path if cg is not None else "",
             )
-        if memory_kb > MEMORY_LIMIT_KB:
-            return _RunResult(status="MLE", output=self._truncate(stdout or ""),
-                              runtime_ms=runtime_ms, memory_kb=memory_kb, error_message=MLE_MSG)
-        return _RunResult(status="OK", output=self._truncate(stdout or ""), runtime_ms=runtime_ms, memory_kb=memory_kb)
+            if extra_env:
+                cmd_env.update(extra_env)
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+                env=cmd_env,
+                cwd=cwd or "/tmp",
+            )
+            try:
+                stdout, stderr = self._communicate_capped(proc, input_data, TIME_LIMIT_S)
+            except subprocess.TimeoutExpired:
+                return _RunResult(status="TLE", runtime_ms=TIME_LIMIT_S * 1000, error_message=TLE_MSG)
+            runtime_ms, rusage_memory_kb = self._measure(start)
+            # 优先 cgroup memory.peak（含 page cache），其次 helper 的子进程自身峰值，
+            # 被输出截断时回退累计值（极端输出场景）
+            sb_memory_kb, cg_peak_kb, cg_oom, stderr = self._parse_sandbox_markers(stderr)
+            if cg_peak_kb is not None:
+                memory_kb = cg_peak_kb
+            elif sb_memory_kb is not None:
+                memory_kb = sb_memory_kb
+            else:
+                memory_kb = rusage_memory_kb
+            if proc.returncode != 0:
+                # RLIMIT_CPU 触发 SIGXCPU(24)，RLIMIT_FSIZE 触发 SIGXFSZ(25)
+                if proc.returncode in (-signal.SIGXCPU, signal.SIGXCPU):
+                    return _RunResult(status="TLE", runtime_ms=runtime_ms, error_message=TLE_MSG)
+                # cgroup OOM kill：memory.events 的 oom_kill 是显式证据（rc 通常为 -9）
+                if cg_oom:
+                    return _RunResult(status="MLE", output=self._truncate((stderr or "").strip() or (stdout or "").strip()),
+                                      runtime_ms=runtime_ms, memory_kb=memory_kb, error_message=MLE_MSG)
+                if memory_kb > MEMORY_LIMIT_KB:
+                    return _RunResult(status="MLE", output=self._truncate((stderr or "").strip() or (stdout or "").strip()),
+                                      runtime_ms=runtime_ms, memory_kb=memory_kb, error_message=MLE_MSG)
+                return _RunResult(
+                    status="RE",
+                    output=self._truncate((stderr or "").strip() or (stdout or "").strip()),
+                    runtime_ms=runtime_ms,
+                    memory_kb=memory_kb,
+                )
+            if memory_kb > MEMORY_LIMIT_KB:
+                return _RunResult(status="MLE", output=self._truncate(stdout or ""),
+                                  runtime_ms=runtime_ms, memory_kb=memory_kb, error_message=MLE_MSG)
+            return _RunResult(status="OK", output=self._truncate(stdout or ""), runtime_ms=runtime_ms, memory_kb=memory_kb)
+        finally:
+            # kill_all 对已退出的判题无害；destroy 保证不留 cgroup 泄漏
+            if cg is not None:
+                cg.kill_all()
+                cg.destroy()
 
 
     def _nproc_for(self, args: list[str]) -> int:
@@ -419,38 +497,47 @@ class RealJudgeEngine(JudgeEngine):
         """编译子进程：同样降权到 sandbox + 清洗环境。
         编译放宽内存（编译器需要更多资源）与文件大小，仅设 CPU 超时。"""
         joined = " ".join(args).lower()
-        cmd, cmd_env = _setpriv_cmd(
-            args,
-            as_limit_kb=AS_LIMIT_KB_JAVA,
-            cpu_s=COMPILE_TIMEOUT_S,
-            fsize_kb=MAX_FILE_SIZE_KB * 2,
-            nproc=COMPILE_MAX_PROCESSES_JVM if any(x in joined for x in ("javac", "java")) else COMPILE_MAX_PROCESSES,
-            nofile=MAX_OPEN_FILES,
-            sb_profile="build-java" if "javac" in joined else "build-c",
-        )
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-            env=cmd_env,
-            cwd=cwd,
-        )
+        nproc = COMPILE_MAX_PROCESSES_JVM if any(x in joined for x in ("javac", "java")) else COMPILE_MAX_PROCESSES
+        cg: Optional[JudgeCgroup] = None
         try:
-            stdout, stderr = self._communicate_capped(proc, "", COMPILE_TIMEOUT_S)
-            _, stderr = self._strip_rusage(stderr)
-            return proc.returncode, stdout or "", stderr or ""
-        except subprocess.TimeoutExpired:
+            cg = self._maybe_cgroup(AS_LIMIT_KB_JAVA, nproc)
+            cmd, cmd_env = _setpriv_cmd(
+                args,
+                as_limit_kb=AS_LIMIT_KB_JAVA,
+                cpu_s=COMPILE_TIMEOUT_S,
+                fsize_kb=MAX_FILE_SIZE_KB * 2,
+                nproc=nproc,
+                nofile=MAX_OPEN_FILES,
+                sb_profile="build-java" if "javac" in joined else "build-c",
+                sb_cgroup=cg.path if cg is not None else "",
+            )
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+                env=cmd_env,
+                cwd=cwd,
+            )
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            try:
-                proc.communicate(timeout=1)
+                stdout, stderr = self._communicate_capped(proc, "", COMPILE_TIMEOUT_S)
+                _, stderr = self._strip_rusage(stderr)
+                return proc.returncode, stdout or "", stderr or ""
             except subprocess.TimeoutExpired:
-                pass
-            return -1, "", "compilation timed out"
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    proc.communicate(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
+                return -1, "", "compilation timed out"
+        finally:
+            if cg is not None:
+                cg.kill_all()
+                cg.destroy()
 
     @staticmethod
     def _chown_sandbox_workdir(path: str) -> None:

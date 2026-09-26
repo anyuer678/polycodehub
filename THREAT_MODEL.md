@@ -119,6 +119,20 @@ Honesty section — what this deployment does **not** claim:
   in production requires regenerating profiles via
   `scripts/trace_syscalls.sh` + running the E2E language matrix first.
 
+### 3.1.2 Opt-in cgroup v2 layer (added 2026-09)
+
+- `engine.py` + `app/cgroup.py` create a per-judgment cgroup v2
+  (`JUDGE_CGROUP=off/auto/require`; off is the default): `pids.max` isolates
+  fork bombs per judgment (fixing the RLIMIT_NPROC per-user cross-worker
+  pollution), `memory.max` enforces the cap, and `memory.peak` +
+  `memory.events:oom_kill` give honest MLE evidence via the
+  `__SB_CGROUP__=<peak>,oom=<n>` marker. Attach failure in sandbox_helper
+  exits 125 (fail-closed).
+- Mitigation class: S3.1/T1 resource exhaustion and rlimit semantic gaps.
+- Status: unit-tested with a fake cgroupfs; adversarial coverage runs on
+  cgroup-v2-capable runners. Deployment requires writable cgroup delegation
+  for the judge container (see docs/SANDBOX_TESTING.md).
+
 ## 6. Reporting
 
 See [SECURITY.md](SECURITY.md). Please do not open public issues for

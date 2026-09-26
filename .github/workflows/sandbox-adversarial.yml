@@ -50,6 +50,17 @@ jobs:
           echo "--- c vs committed header diff (informational) ---"
           git diff --stat -- sandbox_profiles.h || true
 
+      - name: Cgroup diagnostics (delegation probe)
+        run: |
+          mount | grep cgroup || true
+          echo "controllers: $(cat /sys/fs/cgroup/cgroup.controllers 2>/dev/null || echo n/a)"
+          echo "subtree_control: $(cat /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || echo n/a)"
+          mkdir -p /sys/fs/cgroup/polycode-judge/diag 2>/dev/null && echo "mkdir: ok" || echo "mkdir: FAILED"
+          ls -la /sys/fs/cgroup/polycode-judge/diag 2>/dev/null | head -6 || true
+          (echo "+memory" > /sys/fs/cgroup/cgroup.subtree_control && echo "subtree write: ok") || echo "subtree write: FAILED ($?)"
+          (echo max > /sys/fs/cgroup/polycode-judge/diag/memory.max 2>/dev/null && echo "memory.max write: ok") || echo "memory.max write: FAILED ($?)"
+          rmdir /sys/fs/cgroup/polycode-judge/diag 2>/dev/null || true
+
       - name: Create sandbox user (uid 1002 / gid 1001)
         run: |
           sudo groupadd -g 1001 sandbox || true

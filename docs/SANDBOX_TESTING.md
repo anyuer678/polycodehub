@@ -98,3 +98,34 @@ FIX_LOG 回归表：[REGRESSION_FROM_FIXLOG.md](REGRESSION_FROM_FIXLOG.md)。
   INET socket 与 ptrace 仍被拒、AF_UNIX 可用、未知 profile 退出 125 —— **adversarial CI（root）实测**
 - 黑名单模式回归：原 `test_blocked.py` 全部用例继续生效（不设 SB_PROFILE 即走老路径）
 
+
+## cgroup v2 模式（opt-in，JUDGE_CGROUP）
+
+在 rlimit 之上提供**按判题**的资源隔离（`app/cgroup.py`）：
+
+| 配置 | 语义 |
+|------|------|
+| `JUDGE_CGROUP=off`（默认） | 仅 rlimit，行为与历史一致 |
+| `JUDGE_CGROUP=auto` | cgroup v2 可写即用，不可用打 warning 回退 rlimit |
+| `JUDGE_CGROUP=require` | 必须可用，不可用直接抛错（fail-visible） |
+
+- `pids.max`：fork 炸弹防护按**判题**隔离——修复多 worker 并发下 RLIMIT_NPROC
+  按【用户】全局计数、互相污染的老问题（cgroup 模式下 helper 跳过 NPROC rlimit）。
+- `memory.max`：硬上限；超限 OOM kill，`memory.events` 的 `oom_kill` 计数经
+  `__SB_CGROUP__=...,oom=1` 标记回传，engine 据此判 **MLE**（不再依赖 rc 猜测）。
+- `memory.peak`：含 page cache 的准确峰值，engine 优先采信（`_parse_sandbox_markers`：
+  末两行信任位置 + 全位置剥离防伪造，与 rusage 同策略）。
+- 附着失败（helper 子进程写 `cgroup.procs` 失败）→ `__SB_ERROR__=cgroup attach failed` +
+  **exit 125**，绝不裸跑用户代码。
+
+### 测试覆盖
+
+- `tests/test_cgroup_unit.py`：伪 cgroupfs 上的创建/附着/遥测/清理 + 三种模式降级 + 标记解析 —— **CI 必跑（无需 root）**
+- `tests/sandbox_adversarial/test_cgroup.py`：fork 炸弹被 pids.max 拦截、OOM 有 oom_kill 证据、
+  附着失败 fail-closed、并发判题互不污染、与白名单叠加 —— **adversarial CI（root）实测**
+
+### 部署前提
+
+judge 容器需要 cgroup v2 统一层级的**可写委托**（compose 典型做法：
+`cgroup: privileged` + `/sys/fs/cgroup` rw 挂载，或宿主 systemd 委托专用 slice）。
+不可用时 `auto` 模式可安全降级为纯 rlimit。
