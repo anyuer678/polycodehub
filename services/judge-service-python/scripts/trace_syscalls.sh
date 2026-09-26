@@ -28,8 +28,8 @@ command -v strace >/dev/null || { echo "需要 strace（apt-get install -y strac
 
 strace -f -qq -o "$LOG" "$@"
 
-# 行形如: [pid 123] openat(...) = 3 ｜ 无 pid 前缀 ｜ 信号行 --- / +++ 退出行（忽略）
-sed -E 's/^\[pid +[0-9]+\] //' "$LOG" \
+# 行形如: [pid 123] openat(...) ｜ 123  openat(...)（-o 默认数字 pid 前缀）｜ --- / +++（忽略）
+sed -E 's/^\[pid +[0-9]+\] //; s/^[0-9]+[ \t]+//' "$LOG" \
   | grep -oE '^[A-Za-z0-9_]+\(' \
   | tr -d '(' \
   | sort -u > "$OUT_DIR/$PROFILE.syscalls"

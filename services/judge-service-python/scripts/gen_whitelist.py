@@ -83,12 +83,16 @@ _TRACE_NAME_RE = re.compile(r"^(?:\[pid\s+\d+\]\s+)?([A-Za-z0-9_]+)\(")
 
 
 def parse_strace_text(text: str) -> set[str]:
-    """从 strace -f -o 输出中提取 syscall 名集合（忽略信号行 / 退出行）。"""
+    """从 strace -f -o 输出中提取 syscall 名集合（忽略信号行 / 退出行）。
+
+    兼容两种行前缀：`[pid N]`（-ff/attach 风格）与 `N  `（-o 默认数字 pid）。"""
     names: set[str] = set()
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith(("---", "+++")):
             continue
+        line = re.sub(r"^\[pid\s+\d+\]\s+", "", line)
+        line = re.sub(r"^\d+\s+", "", line)
         m = _TRACE_NAME_RE.match(line)
         if m:
             names.add(m.group(1))
