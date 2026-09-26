@@ -180,9 +180,10 @@ def test_whitelist_c_binary_runs(tmp_path: Path):
     reason="need root + netblock + sandbox user + node",
 )
 def test_whitelist_node_runs(tmp_path: Path):
+    """镜像 engine 真实链路：带堆限制 + 1GB RLIMIT_AS（默认 256MB 会让 V8 预留虚拟内存失败）。"""
     proc = _run_helper_cmd(
-        ["node", "-e", "console.log('HELLO_WL_NODE')"],
-        env_extra={"SB_PROFILE": "node"},
+        ["node", "--max-old-space-size=256", "-e", "console.log('HELLO_WL_NODE')"],
+        env_extra={"SB_PROFILE": "node", "SB_MEM_KB": "1048576"},
     )
     assert "HELLO_WL_NODE" in (proc.stdout or ""), f"rc={proc.returncode} err={proc.stderr[-500:]}"
 
