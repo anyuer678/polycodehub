@@ -30,7 +30,25 @@ jobs:
       - name: Install seccomp toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y libseccomp-dev gcc
+          sudo apt-get install -y libseccomp-dev gcc strace
+
+      - name: Trace real syscall sets & regenerate profiles (CI-validated lists)
+        run: |
+          chmod +x scripts/trace_syscalls.sh
+          mkdir -p traces
+          SB_TRACE_DIR=traces scripts/trace_syscalls.sh python -- python3 -c "print('trace')"
+          echo 'int main(){return 0;}' > /tmp/t.c && gcc -O2 -o /tmp/t /tmp/t.c
+          SB_TRACE_DIR=traces scripts/trace_syscalls.sh c -- /tmp/t
+          SB_TRACE_DIR=traces scripts/trace_syscalls.sh node -- node -e "console.log('trace')"
+          echo 'int main(){return 0;}' > /tmp/b.c
+          SB_TRACE_DIR=traces scripts/trace_syscalls.sh build-c -- gcc -O2 -o /tmp/b /tmp/b.c
+          python scripts/gen_whitelist.py --mode traces --trace-dir traces --out sandbox_profiles.h
+          echo "--- traced syscall counts ---"
+          wc -l traces/*.syscalls
+          echo "--- node.syscalls ---"
+          cat traces/node.syscalls
+          echo "--- c vs committed header diff (informational) ---"
+          git diff --stat -- sandbox_profiles.h || true
 
       - name: Create sandbox user (uid 1002 / gid 1001)
         run: |

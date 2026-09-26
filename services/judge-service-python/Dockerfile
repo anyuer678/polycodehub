@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 # - 文件系统：阻止 mount/umount2（防止容器逃逸）
 # - 系统：阻止 reboot/kexec_load（防止系统重启）
 # - 内核攻击面：阻止 io_uring_setup（已知提权 CVE）
-COPY sandbox_netblock.c ./
+COPY sandbox_netblock.c sandbox_profiles.h ./
 RUN gcc -O2 -o /usr/local/bin/sandbox_netblock sandbox_netblock.c -lseccomp && rm sandbox_netblock.c
 COPY app ./app
 RUN chown -R appuser:appgroup /app

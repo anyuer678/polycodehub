@@ -1,6 +1,6 @@
 # 判题沙箱测试指南
 
-> **诚实边界**：本项目沙箱为进程级纵深防御（setuid + seccomp **黑名单** + rlimit + env 清洗），
+> **诚实边界**：本项目沙箱为进程级纵深防御（setuid + seccomp **黑名单**（默认）/ **白名单**（opt-in）+ rlimit + env 清洗），
 > **不是**容器/gVisor 级多租户隔离。不要把 CI 绿灯解读为「生产多租户已就绪」。
 
 ## 测试分层（哪些 CI 已证明，哪些仍要 Docker/root）
@@ -63,3 +63,38 @@ python -m pytest tests/ -q --ignore=tests/integration --ignore=tests/sandbox_adv
 镜像与容器能力、tmpfs、非目标见 [JUDGE_PRODUCTION_IMAGE.md](JUDGE_PRODUCTION_IMAGE.md)。
 
 FIX_LOG 回归表：[REGRESSION_FROM_FIXLOG.md](REGRESSION_FROM_FIXLOG.md)。
+
+## 白名单模式（opt-in，SB_PROFILE）
+
+在黑名单（默认放行+定向拒绝）之上提供**默认拒绝**的 seccomp 白名单模式：
+
+| 模式 | 触发条件 | 语义 |
+|------|----------|------|
+| 黑名单（默认） | 未设 `SB_PROFILE` | 行为与历史版本完全一致，零回归风险 |
+| 白名单 | engine 侧 `JUDGE_SECCOMP_WHITELIST=1` 且 `_setpriv_cmd` 传入 `SB_PROFILE` | 名单外 syscall 一律 `EPERM`；`socket` 仅放行 AF_UNIX 域（参数过滤）；未知 profile → netblock 退出 **125**（fail-closed，绝不回退黑名单） |
+
+- profile 名单在 [`sandbox_profiles.h`](../services/judge-service-python/sandbox_profiles.h)（由 `scripts/gen_whitelist.py` 生成，勿手改）：
+  `c` / `python` / `node` / `java` / `build-c`（gcc/g++ 编译）/ `build-java`（javac 编译）。
+- **当前提交的名单是 curated bootstrap（人工基线）**；`java` / `build-java` 为 experimental（JVM/编译器 syscall 面大，尚未在 CI 实测）。
+- 名单内但内核不存在的 syscall：加载时跳过 + warning（不存在即无攻击面）。
+
+### 启用前必须做的事（DoD）
+
+1. 在目标 judge 镜像内用 `scripts/trace_syscalls.sh` 对**代表性判题负载**（真实题目的编译+运行）逐 profile 采集：
+   ```bash
+   SB_TRACE_DIR=traces scripts/trace_syscalls.sh python -- python3 -c "print('hi')"
+   SB_TRACE_DIR=traces scripts/trace_syscalls.sh build-c -- gcc -O2 -o /tmp/h hello.c
+   # ... node / java / build-java 同理
+   python scripts/gen_whitelist.py --mode traces --trace-dir traces --out sandbox_profiles.h
+   ```
+   提交新生成的头文件（`git diff` 只应出现名单增删）。
+2. 开 `JUDGE_SECCOMP_WHITELIST=1` 跑全语言 E2E 矩阵（`docs/E2E_LANG_MATRIX.md`）。
+3. 灰度观察判题 RE 率——白名单过窄的表现是偶发 EPERM/RE，按 stderr 补名重新生成即可。
+
+### 测试覆盖
+
+- `tests/test_whitelist_gen.py`：strace 解析 / EXCLUDE（socket）/ 并集合成 / 头文件确定性 —— **CI 必跑（无需 root）**
+- `tests/sandbox_adversarial/test_whitelist.py`：python/c/node 在白名单下正常运行（名单充分性）、
+  INET socket 与 ptrace 仍被拒、AF_UNIX 可用、未知 profile 退出 125 —— **adversarial CI（root）实测**
+- 黑名单模式回归：原 `test_blocked.py` 全部用例继续生效（不设 SB_PROFILE 即走老路径）
+
