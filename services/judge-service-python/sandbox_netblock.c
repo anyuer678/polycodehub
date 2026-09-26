@@ -54,6 +54,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <grp.h>
+#include <sys/wait.h>
 
 #include "sandbox_profiles.h"
 
@@ -176,6 +177,16 @@ static int setup_ns_jail(void) {
         }
     }
 
+    /* /tmp：独立 tmpfs（NOSUID, 1777），与其他判题/宿主隔离。
+     * 必须在【工作目录 bind 之前】挂载：工作目录位于 /tmp 之下，
+     * 顺序反了会被 tmpfs 覆盖（首轮 CI 实测教训）。 */
+    if (mkdir_p(newroot, "tmp") != 0) { perror("sandbox_netblock: mkdir tmp"); return -1; }
+    if (snprintf(path, sizeof(path), "%s/tmp", newroot) >= (int)sizeof(path)) return -1;
+    if (mount("tmpfs", path, "tmpfs", MS_NOSUID, "mode=1777,size=131072k") != 0) {
+        perror("sandbox_netblock: mount(tmpfs /tmp)");
+        return -1;
+    }
+
     /* 判题工作目录：按原路径 RW bind（argv 里的绝对路径在 jail 内保持有效） */
     {
         const char *rel = workdir[0] == '/' ? workdir + 1 : workdir;
@@ -187,13 +198,7 @@ static int setup_ns_jail(void) {
         }
     }
 
-    /* /tmp：独立 tmpfs（NOSUID, 1777），与其他判题/宿主隔离 */
-    if (mkdir_p(newroot, "tmp") != 0) { perror("sandbox_netblock: mkdir tmp"); return -1; }
-    if (snprintf(path, sizeof(path), "%s/tmp", newroot) >= (int)sizeof(path)) return -1;
-    if (mount("tmpfs", path, "tmpfs", MS_NOSUID, "mode=1777,size=131072k") != 0) {
-        perror("sandbox_netblock: mount(tmpfs /tmp)");
-        return -1;
-    }
+    /* /tmp：独立 tmpfs 由上方先挂载（见顺序说明） */
 
     /* /dev：tmpfs + 最小设备节点 */
     if (mkdir_p(newroot, "dev") != 0) { perror("sandbox_netblock: mkdir dev"); return -1; }
@@ -375,45 +380,92 @@ int main(int argc, char *argv[]) {
     }
 
     const char *ns = getenv("SB_NS");
-    if (ns != NULL && ns[0] != '\0') {
-        /* ns 模式要求 root（需要 CAP_SYS_ADMIN 做 unshare/mount/chroot/mknod） */
-        if (geteuid() != 0) {
-            fprintf(stderr, "sandbox_netblock: SB_NS requires root; refuse (fail-closed)\n");
-            return EXIT_NS_FAIL;
-        }
-        if (setup_ns_jail() != 0) {
-            return EXIT_NS_FAIL;
-        }
-        if (drop_to_sandbox() != 0) {
-            return EXIT_NS_FAIL;
-        }
-    } else {
+    if (ns == NULL || ns[0] == '\0') {
         /* 历史路径：helper 已 setuid 到 sandbox 用户，本工具仅做 seccomp。
          * 非特权进程加载 seccomp filter 前必须设置 no_new_privs */
         if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
             perror("sandbox_netblock: prctl(NO_NEW_PRIVS)");
             return EXIT_SECCOMP_FAIL;
         }
-    }
-
-    if (install_seccomp() != 0) {
-        return EXIT_SECCOMP_FAIL;
-    }
-
-    /* ns 模式且无 cgroup 时：NPROC 兜底（降权后设置；多 worker 全局计数的老
-     * 限制仍存在——生产应启用 cgroup pids.max，这里保持与历史行为同级的防护） */
-    const char *cg = getenv("SB_CGROUP");
-    const char *nproc_s = getenv("SB_NPROC");
-    if ((ns != NULL && ns[0] != '\0') && (cg == NULL || cg[0] == '\0') &&
-        nproc_s != NULL && nproc_s[0] != '\0') {
-        struct rlimit rl = { (rlim_t)atoi(nproc_s), (rlim_t)atoi(nproc_s) };
-        if (setrlimit(RLIMIT_NPROC, &rl) != 0) {
-            perror("sandbox_netblock: setrlimit NPROC");
+        if (install_seccomp() != 0) {
             return EXIT_SECCOMP_FAIL;
         }
+        execvp(argv[1], &argv[1]);
+        perror("sandbox_netblock: execvp");
+        return EXIT_EXEC_FAIL;
     }
 
-    execvp(argv[1], &argv[1]);
-    perror("sandbox_netblock: execvp");
-    return EXIT_EXEC_FAIL;
+    /* ===== ns 模式（root）：unshare → 构建 jail → fork（ns 内 PID 1）→ 守候 ===== */
+    if (geteuid() != 0) {
+        fprintf(stderr, "sandbox_netblock: SB_NS requires root; refuse (fail-closed)\n");
+        return EXIT_NS_FAIL;
+    }
+    if (setup_ns_jail() != 0) {
+        return EXIT_NS_FAIL;
+    }
+
+    /* CLONE_NEWPID 不会重编号调用者：ns 内 PID 1 是【下一个 fork 的子进程】。
+     * fork 后子进程继续 jail 内流程（cgroup 自附着 → chroot → 降权 → seccomp →
+     * exec 用户代码 = ns 内 PID 1），父进程守候并回传状态/信号。 */
+    pid_t child = fork();
+    if (child < 0) {
+        perror("sandbox_netblock: fork(ns init)");
+        return EXIT_NS_FAIL;
+    }
+    if (child == 0) {
+        /* 子进程：cgroup 按最终执行者重新附着（root 写，无竞态窗口） */
+        const char *cg2 = getenv("SB_CGROUP");
+        if (cg2 != NULL && cg2[0] != '\0') {
+            char procs[4096];
+            if (snprintf(procs, sizeof(procs), "%s/cgroup.procs", cg2) < (int)sizeof(procs)) {
+                FILE *f = fopen(procs, "w");
+                if (f == NULL) {
+                    fprintf(stderr, "sandbox_netblock: cgroup attach failed\n");
+                    return EXIT_NS_FAIL;
+                }
+                fprintf(f, "%d\n", (int)getpid());
+                fclose(f);
+            }
+        }
+        if (chroot(getenv("SB_NS_NEWROOT")) != 0) { perror("sandbox_netblock: chroot"); return EXIT_NS_FAIL; }
+        if (chdir("/") != 0) { perror("sandbox_netblock: chdir"); return EXIT_NS_FAIL; }
+        if (drop_to_sandbox() != 0) {
+            return EXIT_NS_FAIL;
+        }
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+            perror("sandbox_netblock: prctl(NO_NEW_PRIVS)");
+            return EXIT_SECCOMP_FAIL;
+        }
+        if (install_seccomp() != 0) {
+            return EXIT_SECCOMP_FAIL;
+        }
+        /* ns 模式且无 cgroup 时：NPROC 兜底（多 worker 全局计数的老限制仍在，
+         * 生产应启用 cgroup pids.max；此处保持与历史同级防护） */
+        const char *cg = getenv("SB_CGROUP");
+        const char *nproc_s = getenv("SB_NPROC");
+        if ((cg == NULL || cg[0] == '\0') && nproc_s != NULL && nproc_s[0] != '\0') {
+            struct rlimit rl = { (rlim_t)atoi(nproc_s), (rlim_t)atoi(nproc_s) };
+            if (setrlimit(RLIMIT_NPROC, &rl) != 0) {
+                perror("sandbox_netblock: setrlimit NPROC");
+                return EXIT_SECCOMP_FAIL;
+            }
+        }
+        execvp(argv[1], &argv[1]);
+        perror("sandbox_netblock: execvp");
+        return EXIT_EXEC_FAIL;
+    }
+
+    /* 父进程（ns 外侧）：等待 ns 内 PID 1 退出并回传状态/信号，
+     * helper 父进程据此识别 SIGXCPU(24) 判 TLE。 */
+    int status = 0;
+    if (waitpid(child, &status, 0) < 0) {
+        perror("sandbox_netblock: waitpid");
+        return 1;
+    }
+    if (WIFSIGNALED(status)) {
+        signal(WTERMSIG(status), SIG_DFL);
+        raise(WTERMSIG(status));
+        return 128 + WTERMSIG(status);
+    }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 }
