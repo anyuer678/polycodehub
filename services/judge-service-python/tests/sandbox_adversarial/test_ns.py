@@ -130,6 +130,8 @@ def test_ns_workdir_writable(tmp_path: Path):
         "print('WROTE_OK')\n"
     )
     workdir = tempfile.mkdtemp(prefix="sb-wd-")
+    # engine 真实链路同款：工作目录 chown 给 sandbox 用户（否则其无法写入）
+    os.chown(workdir, SANDBOX_UID, SANDBOX_GID)
     os.chmod(workdir, 0o755)
     env = os.environ.copy()
     env.update({

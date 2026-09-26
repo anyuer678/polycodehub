@@ -221,14 +221,6 @@ static int setup_ns_jail(void) {
         }
     }
 
-    /* /proc：在新 PID ns 内挂载，用户代码只见 ns 内进程 */
-    if (mkdir_p(newroot, "proc") != 0) { perror("sandbox_netblock: mkdir proc"); return -1; }
-    if (snprintf(path, sizeof(path), "%s/proc", newroot) >= (int)sizeof(path)) return -1;
-    if (mount("proc", path, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) != 0) {
-        perror("sandbox_netblock: mount(proc)");
-        return -1;
-    }
-
     /* jail 构建完成。chroot 由 fork 出的【ns 内 PID 1】子进程执行——
      * CLONE_NEWPID 的 PID 1 是 fork 后的子进程而非调用者（见 main）。 */
     return 0;
@@ -428,6 +420,12 @@ int main(int argc, char *argv[]) {
         }
         if (chroot(getenv("SB_NS_NEWROOT")) != 0) { perror("sandbox_netblock: chroot"); return EXIT_NS_FAIL; }
         if (chdir("/") != 0) { perror("sandbox_netblock: chdir"); return EXIT_NS_FAIL; }
+        /* /proc 由 ns 内进程挂载：procfs 绑定【挂载者】的 PID ns，
+         * 父进程 unshare(NEWPID) 后仍在宿主 ns，故必须在 fork 后的子进程里挂 */
+        if (mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) != 0) {
+            perror("sandbox_netblock: mount(proc)");
+            return EXIT_NS_FAIL;
+        }
         if (drop_to_sandbox() != 0) {
             return EXIT_NS_FAIL;
         }
