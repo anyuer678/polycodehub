@@ -140,20 +140,8 @@ def main() -> int:
 
     pid = os.fork()
     if pid == 0:
-        # 子进程：降权到 sandbox 后再设 NPROC（此时 sandbox 用户仅有自身 1 个进程，
-        # 用户代码之后 fork 任何子进程都会被拒绝），然后执行用户代码。
-        try:
-            # 先清空 root 继承的补充组（需 root 权限，必须在 setuid 前），
-            # 否则子进程虽切换了主组/UID 但仍处于特权补充组中
-            os.setgroups([])
-            os.setgid(SANDBOX_GID)
-            os.setuid(SANDBOX_UID)
-        except OSError as exc:
-            os.write(2, f"__SB_ERROR__=setuid failed: {exc}\n".encode())
-            os._exit(126)
-        # cgroup v2（opt-in）：把本进程挂进判题专属 cgroup（engine 已预设
-        # pids.max/memory.max 并把目录 chown 给 sandbox 用户）。必须在 exec
-        # 用户代码之前完成，否则存在未受控窗口；失败即 fail-closed 拒绝判题。
+        # cgroup 附着（以 root 写入：ns/非 ns 均在此完成，先附着再降权/chroot，
+        # 保证 exec 用户代码时已受控；失败即 fail-closed 拒绝判题）。
         sb_cgroup = os.environ.get("SB_CGROUP", "")
         if sb_cgroup:
             try:
@@ -162,25 +150,38 @@ def main() -> int:
             except OSError as exc:
                 os.write(2, f"__SB_ERROR__=cgroup attach failed: {exc}\n".encode())
                 os._exit(125)
-        # 经 sandbox_netblock 设置 seccomp 安全隔离后再 exec 用户代码；
+        sb_ns = os.environ.get("SB_NS", "")
+        if not sb_ns:
+            # 历史路径：降权到 sandbox 后调 netblock（netblock 仅做 seccomp）。
+            # 非降权阶段设 NPROC（此时 sandbox 用户仅有自身 1 个进程，之后 fork 即被拒）。
+            try:
+                # 先清空 root 继承的补充组（需 root 权限，必须在 setuid 前），
+                # 否则子进程虽切换了主组/UID 但仍处于特权补充组中
+                os.setgroups([])
+                os.setgid(SANDBOX_GID)
+                os.setuid(SANDBOX_UID)
+            except OSError as exc:
+                os.write(2, f"__SB_ERROR__=setuid failed: {exc}\n".encode())
+                os._exit(126)
+            if not sb_cgroup:
+                try:
+                    resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
+                except OSError as exc:
+                    # 静默失败会让 fork 炸弹防护失效（多 worker 并发时 sandbox 用户已有
+                    # 其他子进程，setrlimit 会因进程数超过新软限制而失败）——必须可见
+                    os.write(2, f"__SB_ERROR__=setrlimit NPROC failed: {exc}\n".encode())
+                    os._exit(125)
+        else:
+            # ns 模式：netblock 以 root 完成 unshare(NET/PID/MOUNT) → 构建 jail 根
+            # → chroot → 降权（SB_UID/SB_GID）→ seccomp → exec 用户代码。
+            # fork 炸弹防护由 cgroup pids.max（优先）或 netblock 内部 NPROC 接管。
+            pass
+        # 经 sandbox_netblock 设置安全隔离后再 exec 用户代码；
         # 工具缺失时拒绝执行（fail-closed），防止用户代码绕过安全限制
         if not netblock_ready(netblock_bin):
             os.write(2, b"__SB_ERROR__=sandbox_netblock missing or not executable; refuse to judge\n")
             os._exit(125)
         cmd = [netblock_bin, *args]
-        if sb_cgroup:
-            # cgroup 模式：fork 炸弹防护由 pids.max 按【判题】隔离，跳过 NPROC rlimit。
-            # RLIMIT_NPROC 按【用户】全局计数：多 worker 并发时互相污染（这正是
-            # 上面 setrlimit NPROC failed 的真根源），pids.max 语义才是对的。
-            pass
-        else:
-            try:
-                resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
-            except OSError as exc:
-                # 静默失败会让 fork 炸弹防护失效（多 worker 并发时 sandbox 用户已有
-                # 其他子进程，setrlimit 会因进程数超过新软限制而失败）——必须可见
-                os.write(2, f"__SB_ERROR__=setrlimit NPROC failed: {exc}\n".encode())
-                os._exit(125)
         try:
             os.execvp(cmd[0], cmd)
         except OSError as exc:

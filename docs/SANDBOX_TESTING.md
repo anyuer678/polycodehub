@@ -129,3 +129,44 @@ FIX_LOG 回归表：[REGRESSION_FROM_FIXLOG.md](REGRESSION_FROM_FIXLOG.md)。
 judge 容器需要 cgroup v2 统一层级的**可写委托**（compose 典型做法：
 `cgroup: privileged` + `/sys/fs/cgroup` rw 挂载，或宿主 systemd 委托专用 slice）。
 不可用时 `auto` 模式可安全降级为纯 rlimit。
+
+## ns/jail 模式（opt-in，JUDGE_NS）
+
+在 cgroup（M2）之上再提供**命名空间 + 最小根文件系统**（`sandbox_netblock` 门卫模式）：
+
+| 配置 | 语义 |
+|------|------|
+| `JUDGE_NS=off`（默认） | 不建命名空间，行为与历史一致 |
+| `JUDGE_NS=auto` | root + 宿主具备 /usr 时启用（内核能力校验在 netblock，失败 125 fail-visible） |
+| `JUDGE_NS=require` | 直接启用，不可用由 netblock 125 暴露 |
+
+启用后 netblock 以 root 依次完成（`SB_NS=1`）：
+
+1. `unshare(CLONE_NEWNET)`：空网络栈（无任何接口，连 loopback 都没有；seccomp socket 拒绝保留为纵深）
+2. `unshare(CLONE_NEWPID)`：本进程成为 ns 内 PID 1，宿主进程不可见/不可寻址
+3. `unshare(CLONE_NEWNS)` + MS_PRIVATE：独立挂载表
+4. 构建 jail 根（tmpfs）：`SB_NS_DIRS_RO`（/usr,/lib,/lib64,/bin）只读 bind + /etc 最小文件集
+   （ld.so.cache/nsswitch/hosts/passwd/group/resolv/localtime）+ 判题工作目录按原路径 RW bind
+   （argv 绝对路径保持有效）+ /tmp tmpfs（1777）+ /dev（null/zero/random/urandom）+ /proc
+5. `chroot` → 降权（SB_UID/SB_GID）→ seccomp → exec 用户代码
+
+### 收敛效果
+
+- 宿主文件系统不可见：jail 内只有 RO 运行时目录 + 工作目录 + /tmp（/etc/shadow 等不存在）
+- 宿主进程不可见：/proc 只含 ns 内进程，用户代码即 PID 1
+- 网络彻底断开：空 netns 层面无接口，seccomp 层面拒绝 socket（双重）
+- 与 cgroup（pids.max/memory.max）和 seccomp 白名单可叠加
+
+### 测试覆盖
+
+- `tests/sandbox_adversarial/test_ns.py`：jail 内 python 运行、PID=1 与 /proc 隔离、
+  /etc/shadow 隐藏而 ld.so.cache 可用、网络拒绝、工作目录可写、宿主侧编译+ jail 内运行、
+  ns+cgroup 组合下 fork 炸弹仍被拦 —— **adversarial CI（root）实测**
+
+### 部署前提与非目标
+
+- 要求 judge 容器具备 `CAP_SYS_ADMIN`（unshare/mount/chroot/mknod）；
+  `--privileged` 或 `--cap-add SYS_ADMIN --cap-add SYS_CHROOT`。
+- 非 root 无法使用本模式（user namespaces 变体刻意未做——避免 userns 攻击面）。
+- 非 goal：多租户强隔离（同宿主跨判题仍靠 uid + 每判题 cgroup + jail 内 /tmp 隔离），
+  见 THREAT_MODEL.md 非目标章节。

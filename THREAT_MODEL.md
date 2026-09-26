@@ -133,6 +133,20 @@ Honesty section — what this deployment does **not** claim:
   cgroup-v2-capable runners. Deployment requires writable cgroup delegation
   for the judge container (see docs/SANDBOX_TESTING.md).
 
+### 3.1.3 Opt-in namespaces + minimal-rootfs jail (added 2026-09)
+
+- `SB_NS=1` (engine `JUDGE_NS=off/auto/require`; off is the default): netblock
+  unshares NET/PID/MOUNT, builds a tmpfs minimal root (RO runtime dirs,
+  minimal /etc, RW workdir bind, /tmp + /dev tmpfs, /proc of the new pid ns),
+  chroots, drops to the sandbox uid, then applies seccomp. Empty netns means
+  no interfaces exist at all; /proc only exposes the ns.
+- Mitigation class: S3.1/T1 host filesystem visibility, host process
+  visibility, network reachability (defense in depth beyond seccomp).
+- Status: adversarial suite runs the jail cases (python run, PID/proc
+  isolation, /etc/shadow hidden, INET denied, workdir writable, C binary run,
+  fork-bomb containment combined with cgroup). Requires CAP_SYS_ADMIN in the
+  judge container; user-namespace variant intentionally not implemented.
+
 ## 6. Reporting
 
 See [SECURITY.md](SECURITY.md). Please do not open public issues for
