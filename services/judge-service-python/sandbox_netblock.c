@@ -187,6 +187,9 @@ static int setup_ns_jail(void) {
         return -1;
     }
 
+    /* /proc 目录骨架（挂载由 ns 内子进程执行——procfs 绑定挂载者的 PID ns） */
+    if (mkdir_p(newroot, "proc") != 0) { perror("sandbox_netblock: mkdir proc"); return -1; }
+
     /* 判题工作目录：按原路径 RW bind（argv 里的绝对路径在 jail 内保持有效） */
     {
         const char *rel = workdir[0] == '/' ? workdir + 1 : workdir;
