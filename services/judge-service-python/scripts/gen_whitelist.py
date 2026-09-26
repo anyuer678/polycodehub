@@ -45,6 +45,10 @@ BASELINE: set[str] = {
     "membarrier", "restart_syscall", "statfs", "fstatfs",
     "connect", "bind", "listen", "accept", "accept4", "getsockname", "getpeername",
     "getsockopt", "setsockopt", "sendmsg", "recvmsg", "sendto", "recvfrom", "shutdown",
+    # clone/clone3：与黑名单模式对等（黑名单本就放行线程/进程创建）。
+    # 现代 glibc pthread 走 clone3，seccomp 返回 EPERM 不会触发 ENOSYS 回退，
+    # 缺它则 node/python threading 直接崩溃；fork 炸弹仍由 rlimit NPROC + (后续) cgroup 约束。
+    "clone", "clone3",
 }
 
 # 采集/合并时强制排除：socket 由 netblock 参数过滤特判

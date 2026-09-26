@@ -1,5 +1,5 @@
 /* sandbox_profiles.h —— 由 scripts/gen_whitelist.py 生成，勿手改。
- * 生成时间: 2026-09-26T09:41:17Z UTC | 模式: curated
+ * 生成时间: 2026-09-26T09:57:30Z UTC | 模式: curated
  * 来源: curated bootstrap（人工基线 + 各语言增集）；
  * 正式启用前应在目标镜像用 scripts/trace_syscalls.sh 重新采集并覆盖本文件。
  * socket 不在名单内：由 netblock 以参数过滤仅放行 AF_UNIX 域。
@@ -13,7 +13,7 @@ struct SBProfile {
     const char *const *syscalls; /* NULL 结尾 */
 };
 
-/* profile: c —— 113 syscalls */
+/* profile: c —— 115 syscalls */
 static const char *const SB_LIST_c[] = {
     "accept",
     "accept4",
@@ -25,6 +25,8 @@ static const char *const SB_LIST_c[] = {
     "chown",
     "clock_gettime",
     "clock_nanosleep",
+    "clone",
+    "clone3",
     "close",
     "connect",
     "dup",
@@ -131,7 +133,7 @@ static const char *const SB_LIST_c[] = {
     NULL,
 };
 
-/* profile: python —— 114 syscalls */
+/* profile: python —— 116 syscalls */
 static const char *const SB_LIST_python[] = {
     "accept",
     "accept4",
@@ -143,6 +145,8 @@ static const char *const SB_LIST_python[] = {
     "chown",
     "clock_gettime",
     "clock_nanosleep",
+    "clone",
+    "clone3",
     "close",
     "connect",
     "dup",
@@ -250,7 +254,7 @@ static const char *const SB_LIST_python[] = {
     NULL,
 };
 
-/* profile: node —— 122 syscalls */
+/* profile: node —— 124 syscalls */
 static const char *const SB_LIST_node[] = {
     "accept",
     "accept4",
@@ -262,6 +266,8 @@ static const char *const SB_LIST_node[] = {
     "chown",
     "clock_gettime",
     "clock_nanosleep",
+    "clone",
+    "clone3",
     "close",
     "connect",
     "dup",
