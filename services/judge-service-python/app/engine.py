@@ -74,6 +74,16 @@ CGROUP_MODE = {
 # 紧贴 __SB_RUSAGE__ 之前（末两行才可信，防用户伪造，与 RUSAGE 同策略）。
 CGROUP_MARKER_RE = re.compile(r"^__SB_CGROUP__=(\d+),oom=(\d+)[ \t]*(?:\r\n|\r|\n)?$")
 
+# namespaces + jail 模式（opt-in）：JUDGE_NS=off/auto/require（语义同 JUDGE_CGROUP）。
+# SB_NS=1 时 netblock 以 root 完成 unshare(NET/PID/MOUNT) → tmpfs jail 根构建
+# （SB_NS_DIRS_RO 只读 bind + 工作目录 RW bind + /tmp//dev tmpfs + /proc）→
+# chroot → 降权（SB_UID/SB_GID）→ seccomp → exec。要求 root（CAP_SYS_ADMIN）。
+NS_MODE = {
+    "1": "require", "true": "require", "yes": "require", "require": "require",
+    "auto": "auto",
+}.get(os.environ.get("JUDGE_NS", "off").strip().lower(), "off")
+NS_DIRS_RO = "/usr,/lib,/lib64,/bin"  # 运行时与动态链接依赖（jail 内只读 bind）
+
 
 def _runtime_nproc(language: str) -> int:
     lang = (language or "").lower()
@@ -124,11 +134,12 @@ def _ensure_work_root() -> str:
 
 def _setpriv_cmd(args: list[str], as_limit_kb: int, cpu_s: int,
                  fsize_kb: int, nproc: int, nofile: int,
-                 sb_profile: str = "", sb_cgroup: str = "") -> list[str]:
+                 sb_profile: str = "", sb_cgroup: str = "", sb_ns_newroot: str = "") -> list[str]:
     """经 sandbox_helper 降权执行：root 设置 rlimit 后 setuid 到 sandbox 再 exec。
     helper 路径由 engine 所在目录解析；限制参数经环境变量 SB_* 传入。
     sb_profile 非空且 WHITELIST_ENABLED 时额外传 SB_PROFILE，netblock 走白名单模式。
-    sb_cgroup 非空且 CGROUP_MODE 启用时传 SB_CGROUP，helper 附着判题专属 cgroup。"""
+    sb_cgroup 非空且 CGROUP_MODE 启用时传 SB_CGROUP，helper 附着判题专属 cgroup。
+    sb_ns_newroot 非空且 NS_MODE 启用时传 SB_NS 组，netblock 完成 ns/jail/降权全链路。"""
     helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sandbox_helper.py")
     env = dict(SANDBOX_ENV)
     env.update({
@@ -142,6 +153,12 @@ def _setpriv_cmd(args: list[str], as_limit_kb: int, cpu_s: int,
         env["SB_PROFILE"] = sb_profile
     if sb_cgroup and CGROUP_MODE != "off":
         env["SB_CGROUP"] = sb_cgroup
+    if sb_ns_newroot and NS_MODE != "off":
+        env["SB_NS"] = "1"
+        env["SB_NS_NEWROOT"] = sb_ns_newroot
+        env["SB_NS_DIRS_RO"] = NS_DIRS_RO
+        env["SB_UID"] = str(SANDBOX_UID)   # ns 模式：netblock 在 jail 内降权
+        env["SB_GID"] = str(SANDBOX_GID)
     return [sys.executable, helper, *args], env
 
 
@@ -361,6 +378,22 @@ class RealJudgeEngine(JudgeEngine):
             raise
         return "".join(out_chunks), "".join(err_chunks)
 
+    def _maybe_ns(self) -> Optional[str]:
+        """按 JUDGE_NS 配置为本次判题准备 jail 根目录（ns 构建由 netblock 完成）。
+
+        - off（默认）：返回 None；
+        - auto：root + 宿主具备 /usr 时启用（真正的内核能力校验在 netblock，
+          失败以 125 fail-visible）；否则打 warning 回退；
+        - require：直接启用，不可用由 netblock 125 暴露。"""
+        if NS_MODE == "off":
+            return None
+        if NS_MODE == "auto":
+            is_root = getattr(os, "geteuid", None) is not None and os.geteuid() == 0
+            if not (is_root and os.path.isdir("/usr")):
+                print("[engine] ns unavailable (mode=auto), fallback to non-ns", file=sys.stderr)
+                return None
+        return tempfile.mkdtemp(prefix="sb-root-")
+
     def _maybe_cgroup(self, mem_kb: int, pids: int) -> Optional[JudgeCgroup]:
         """按 JUDGE_CGROUP 配置创建判题专属 cgroup v2。
 
@@ -388,8 +421,17 @@ class RealJudgeEngine(JudgeEngine):
         使用 start_new_session 创建独立进程组，超时时向整个进程组发 SIGKILL。"""
         nproc = self._nproc_for(args)
         cg: Optional[JudgeCgroup] = None
+        newroot: Optional[str] = None
+        own_workdir: Optional[str] = None
         try:
             cg = self._maybe_cgroup(as_limit_kb, nproc)
+            newroot = self._maybe_ns()
+            if newroot is not None and not cwd:
+                # ns 模式必须把用户代码放进可写工作目录（jail 内按原路径 RW bind）；
+                # 不传 cwd 的运行时（python/node）在这里补建
+                own_workdir = tempfile.mkdtemp(prefix="sb-wd-", dir=_ensure_work_root())
+                self._chown_sandbox_workdir(own_workdir)
+                cwd = own_workdir
             cmd, cmd_env = _setpriv_cmd(
                 args,
                 as_limit_kb=as_limit_kb,
@@ -399,6 +441,7 @@ class RealJudgeEngine(JudgeEngine):
                 nofile=MAX_OPEN_FILES,
                 sb_profile=sb_profile,
                 sb_cgroup=cg.path if cg is not None else "",
+                sb_ns_newroot=newroot or "",
             )
             if extra_env:
                 cmd_env.update(extra_env)
@@ -452,6 +495,11 @@ class RealJudgeEngine(JudgeEngine):
             if cg is not None:
                 cg.kill_all()
                 cg.destroy()
+            # jail 根目录（宿主侧只剩空目录；tmpfs 已随 ns 消亡）
+            if newroot is not None:
+                shutil.rmtree(newroot, ignore_errors=True)
+            if own_workdir is not None:
+                shutil.rmtree(own_workdir, ignore_errors=True)
 
 
     def _nproc_for(self, args: list[str]) -> int:
@@ -499,8 +547,10 @@ class RealJudgeEngine(JudgeEngine):
         joined = " ".join(args).lower()
         nproc = COMPILE_MAX_PROCESSES_JVM if any(x in joined for x in ("javac", "java")) else COMPILE_MAX_PROCESSES
         cg: Optional[JudgeCgroup] = None
+        newroot: Optional[str] = None
         try:
             cg = self._maybe_cgroup(AS_LIMIT_KB_JAVA, nproc)
+            newroot = self._maybe_ns()
             cmd, cmd_env = _setpriv_cmd(
                 args,
                 as_limit_kb=AS_LIMIT_KB_JAVA,
@@ -510,6 +560,7 @@ class RealJudgeEngine(JudgeEngine):
                 nofile=MAX_OPEN_FILES,
                 sb_profile="build-java" if "javac" in joined else "build-c",
                 sb_cgroup=cg.path if cg is not None else "",
+                sb_ns_newroot=newroot or "",
             )
             proc = subprocess.Popen(
                 cmd,
@@ -538,6 +589,8 @@ class RealJudgeEngine(JudgeEngine):
             if cg is not None:
                 cg.kill_all()
                 cg.destroy()
+            if newroot is not None:
+                shutil.rmtree(newroot, ignore_errors=True)
 
     @staticmethod
     def _chown_sandbox_workdir(path: str) -> None:
