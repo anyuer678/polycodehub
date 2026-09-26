@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -99,14 +100,20 @@ def test_sandbox_rejects_network_socket(tmp_path):
     reason="need root + netblock + sandbox user",
 )
 def test_sandbox_rejects_ptrace(tmp_path):
+    # ptrace 被 seccomp 拒绝时 syscall 返回 -1/EPERM，而进程 rc 会被后续 print 掩盖：
+    # 断言必须落在【返回值 + errno】上，而非进程退出码
     code = (
-        "import ctypes, ctypes.util\n"
-        "libc=ctypes.CDLL(ctypes.util.find_library('c'))\n"
-        "print('PTRACE', libc.ptrace(0,0,0,0))\n"
+        "import ctypes\n"
+        "libc=ctypes.CDLL(None, use_errno=True)\n"
+        "res=libc.ptrace(0,0,0,0)\n"
+        "print('PTRACE_RES', res, ctypes.get_errno())\n"
     )
     proc = _run_helper(code, tmp_path)
-    err = (proc.stderr or "").lower()
-    assert proc.returncode != 0 or "not permitted" in err or "eperm" in err
+    m = re.search(r"PTRACE_RES (-?\d+) (\d+)", proc.stdout or "")
+    if m is None:
+        assert proc.returncode != 0, "ptrace 调用无输出且进程正常退出？"
+    else:
+        assert int(m.group(1)) == -1 and int(m.group(2)) == 1, f"ptrace 未被拒绝: {m.group(0)}"
 
 
 @pytest.mark.skipif(
