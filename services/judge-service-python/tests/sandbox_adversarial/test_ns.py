@@ -48,6 +48,7 @@ def _run_ns(code: str, tmp_path: Path, env_extra: dict | None = None,
         "SB_UID": str(SANDBOX_UID),
         "SB_GID": str(SANDBOX_GID),
         "SB_NS": "1",
+        "SB_NS_DIRS_RO": "/usr,/lib,/lib64,/bin",
     })
     newroot = tempfile.mkdtemp(prefix="sb-root-")
     workdir = tempfile.mkdtemp(prefix="sb-wd-")
@@ -139,6 +140,7 @@ def test_ns_workdir_writable(tmp_path: Path):
         "SB_GID": str(SANDBOX_GID),
         "SB_NS": "1",
         "SB_NS_NEWROOT": tempfile.mkdtemp(prefix="sb-root-"),
+        "SB_NS_DIRS_RO": "/usr,/lib,/lib64,/bin",
     })
     py = Path(workdir) / "user.py"
     py.write_text(code, encoding="utf-8")
@@ -172,6 +174,7 @@ def test_ns_c_binary_runs(tmp_path: Path):
         "SB_GID": str(SANDBOX_GID),
         "SB_NS": "1",
         "SB_NS_NEWROOT": newroot,
+        "SB_NS_DIRS_RO": "/usr,/lib,/lib64,/bin",
     })
     try:
         proc = subprocess.run(
