@@ -111,6 +111,8 @@ static int bind_file_ro(const char *src, const char *dst) {
 
 /* ============ namespaces + jail（SB_NS=1，root） ============ */
 
+static char g_workdir[4096]; /* 宿主侧工作目录绝对路径（jail 内同路径 bind 为 RW） */
+
 static const char *const ETC_FILES[] = {
     "ld.so.cache", "ld.so.conf", "nsswitch.conf", "hosts",
     "passwd", "group", "resolv.conf", "localtime", NULL,
@@ -224,6 +226,7 @@ static int setup_ns_jail(void) {
         }
     }
 
+    snprintf(g_workdir, sizeof(g_workdir), "%s", workdir);
     /* jail 构建完成。chroot 由 fork 出的【ns 内 PID 1】子进程执行——
      * CLONE_NEWPID 的 PID 1 是 fork 后的子进程而非调用者（见 main）。 */
     return 0;
@@ -422,7 +425,8 @@ int main(int argc, char *argv[]) {
             }
         }
         if (chroot(getenv("SB_NS_NEWROOT")) != 0) { perror("sandbox_netblock: chroot"); return EXIT_NS_FAIL; }
-        if (chdir("/") != 0) { perror("sandbox_netblock: chdir"); return EXIT_NS_FAIL; }
+        /* cwd 切到 jail 内的工作目录 bind（相对路径读写落在 RW bind 上） */
+        if (chdir(g_workdir) != 0) { perror("sandbox_netblock: chdir(workdir)"); return EXIT_NS_FAIL; }
         /* /proc 由 ns 内进程挂载：procfs 绑定【挂载者】的 PID ns，
          * 父进程 unshare(NEWPID) 后仍在宿主 ns，故必须在 fork 后的子进程里挂 */
         if (mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) != 0) {
