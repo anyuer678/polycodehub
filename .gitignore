@@ -35,3 +35,7 @@ skills-lock.json
 
 # 构建产物
 .dist/
+
+# python coverage 运行产物
+.coverage
+coverage.xml
