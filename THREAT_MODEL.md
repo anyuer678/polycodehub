@@ -93,6 +93,10 @@ Honesty section — what this deployment does **not** claim:
 5. **Sandbox is Linux-specific.** The setuid/seccomp design requires Linux;
    running judge-service on macOS/Windows host without the container is
    unsupported and unsafe.
+6. **Jail has no `/sys` (see 3.1.3).** The minimal rootfs in `SB_NS=1` mode
+   deliberately does not mount `/sys`; runtimes depending on CPU-topology
+   sysfs probing are unsupported in jail mode. A selective read-only bind
+   (`/sys/devices/system/cpu`) is a possible future opt-in, not enabled.
 
 ## 5. Verification hooks
 
@@ -113,11 +117,13 @@ Honesty section — what this deployment does **not** claim:
   allowed syscall set from "everything minus a denylist" to
   "an explicit, reviewable allowlist". Legacy denylist mode remains the
   default until profiles are regenerated from strace on the target image.
-- Status: curated bootstrap profiles are CI-tested for c / python / node
-  run paths (`tests/sandbox_adversarial/test_whitelist.py`); java /
-  build-java are experimental and NOT yet CI-proven — enabling the mode
-  in production requires regenerating profiles via
-  `scripts/trace_syscalls.sh` + running the E2E language matrix first.
+- Status: curated bootstrap profiles are CI-tested for c / python / node and
+  **java / build-java** run paths (`tests/sandbox_adversarial/test_whitelist.py`).
+  java empirical proof (2026-09, issue #24): full zulu JDK (server VM) on
+  `ubuntu-latest`, strace collection of `javac`/`java` hello workloads plus the
+  sandboxed run path under `SB_TEST_JAVA=1`. Regenerating profiles via
+  `scripts/trace_syscalls.sh` on the target judge image before production
+  enablement remains the recommended deployment step.
 
 ### 3.1.2 Opt-in cgroup v2 layer (added 2026-09)
 
@@ -146,6 +152,13 @@ Honesty section — what this deployment does **not** claim:
   isolation, /etc/shadow hidden, INET denied, workdir writable, C binary run,
   fork-bomb containment combined with cgroup). Requires CAP_SYS_ADMIN in the
   judge container; user-namespace variant intentionally not implemented.
+- Non-goal (issue #25, resolved 2026-09): the jail does **not** mount `/sys`.
+  Runtimes probing `/sys/devices/system/cpu` (e.g. JVM `ActiveProcessorCount`
+  detection, some numeric libraries) are unsupported in jail mode; the
+  whitelist (non-jail) seccomp path is unaffected. No supported judge
+  workload has failed on this to date; a read-only bind of
+  `/sys/devices/system/cpu` may be reconsidered behind an explicit opt-in
+  env only if a real workload demands it — default stays deny.
 
 ## 6. Reporting
 
