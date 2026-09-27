@@ -6,15 +6,19 @@
 - 附着失败 fail-closed（exit 125）
 - cgroup 与 seccomp 白名单可叠加
 
-GH hosted runner 为 cgroup v2 且 root 可建子组；无 cgroup 环境自动跳过。
+cgroup 根可写的环境实测（特权容器/可委托部署；GH hosted runner 的 cgroup 根
+对 root 也只读，cgroup 用例在 CI 一律 skip——见 test_ns 首个 cgroup 交互用例）。
+无 cgroup 环境自动跳过。
 """
 
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -32,17 +36,27 @@ SANDBOX_UID = int(os.environ.get("SB_SANDBOX_UID", "1002"))
 SANDBOX_GID = int(os.environ.get("SB_SANDBOX_GID", "1001"))
 
 FORK_BOMB = (
-    "import os\n"
+    # pids.max 约束的是【并发任务数】而非累计 fork 次数：子进程必须存活（sleep）
+    # 才能把任务数顶到上限，fork 才会开始 EAGAIN。串行 fork+wait+exit 的炸弹
+    # 任意时刻任务数 ≤2，永远打不满 pids.max（镜像内实测 2026-09 教训）。
+    "import os, time\n"
     "ok = 0\n"
+    "kids = []\n"
     "for _ in range(30):\n"
     "    try:\n"
     "        pid = os.fork()\n"
     "    except OSError:\n"
-    "        continue\n"
+    "        break\n"
     "    if pid == 0:\n"
+    "        time.sleep(5)\n"
     "        os._exit(0)\n"
-    "    os.waitpid(pid, 0)\n"
+    "    kids.append(pid)\n"
     "    ok += 1\n"
+    "for pid in kids:\n"
+    "    try:\n"
+    "        os.waitpid(pid, 0)\n"
+    "    except OSError:\n"
+    "        pass\n"
     "print('FORKS', ok)\n"
 )
 
@@ -75,12 +89,17 @@ def _run_in_cgroup(code: str, tmp_path: Path, mem_kb: int, pids: int,
                    env_extra: dict | None = None) -> tuple[subprocess.CompletedProcess, JudgeCgroup]:
     """测试自建 cgroup（engine 在真实链路里做的事），经 helper 跑用户代码。
 
-    runner 未委托 cgroup 写权限（写 memory.max EACCES）时 skip——此时 cgroup 层
-    的验证应在具备委托的部署环境执行；意外的非委托类错误仍会正常失败。"""
+    runner 未委托 cgroup 写权限（GH hosted runner 的 cgroup 根对 root 也只读，
+    实测 2026-09：mkdir/subtree_control 全 EACCES）时 skip——此时 cgroup 层的
+    验证应在特权容器/可委托部署环境执行；意外的非委托类错误仍会正常失败。
+    用户脚本放在 /tmp 下 0755 专用目录（pytest tmp_path 整条链 0700，sandbox
+    用户不可穿越）。"""
     try:
         cg = JudgeCgroup.create(mem_kb=mem_kb, pids_max=pids, owner_uid=SANDBOX_UID)
     except CgroupUnavailable as exc:
         pytest.skip(f"cgroup delegation unavailable on this runner: {exc}")
+    workdir = tempfile.mkdtemp(prefix="sb-cg-")
+    os.chmod(workdir, 0o755)
     env = os.environ.copy()
     env.update({
         "SANDBOX_NETBLOCK": SANDBOX_NETBLOCK,
@@ -91,13 +110,16 @@ def _run_in_cgroup(code: str, tmp_path: Path, mem_kb: int, pids: int,
     })
     if env_extra:
         env.update(env_extra)
-    py = tmp_path / "user.py"
+    py = Path(workdir) / "user.py"
     py.write_text(code, encoding="utf-8")
     cmd_argv = argv if argv is not None else [sys.executable, str(py)]
-    proc = subprocess.run(
-        [sys.executable, SANDBOX_HELPER, *cmd_argv],
-        capture_output=True, text=True, timeout=60, env=env,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, SANDBOX_HELPER, *cmd_argv],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
     return proc, cg
 
 
@@ -120,8 +142,12 @@ def test_cgroup_pids_max_contains_fork_bomb(tmp_path: Path):
 
 
 def test_cgroup_memory_max_oom_kill_has_evidence(tmp_path: Path):
-    """memory.max=64MB：512MB 分配被 OOM kill，helper 标记 oom=1（显式证据，非猜测）。"""
-    proc, cg = _run_in_cgroup(MEMORY_HOG, tmp_path, mem_kb=65536, pids=8)
+    """memory.max=64MB：512MB 分配被 OOM kill，helper 标记 oom=1（显式证据，非猜测）。
+
+    SB_MEM_KB（RLIMIT_AS）须大于 memory.max，否则 rlimit 先触发 MemoryError、
+    cgroup OOM 永远不会被观察到（镜像内实测 2026-09 教训）。"""
+    proc, cg = _run_in_cgroup(MEMORY_HOG, tmp_path, mem_kb=65536, pids=8,
+                              env_extra={"SB_MEM_KB": "1048576"})
     try:
         assert "HOGGED" not in (proc.stdout or "")
         assert proc.returncode != 0
@@ -163,6 +189,8 @@ def test_cgroup_concurrent_judgments_are_isolated(tmp_path: Path):
     })
     procs = []
     cgs = []
+    workdir = tempfile.mkdtemp(prefix="sb-cg-conc-")
+    os.chmod(workdir, 0o755)
     try:
         for i in range(2):
             try:
@@ -173,7 +201,7 @@ def test_cgroup_concurrent_judgments_are_isolated(tmp_path: Path):
             cgs.append(cg)
             e = dict(env)
             e["SB_CGROUP"] = cg.path
-            py = tmp_path / f"bomb{i}.py"
+            py = Path(workdir) / f"bomb{i}.py"
             py.write_text(FORK_BOMB, encoding="utf-8")
             procs.append((subprocess.Popen(
                 [sys.executable, SANDBOX_HELPER, sys.executable, str(py)],
@@ -185,6 +213,7 @@ def test_cgroup_concurrent_judgments_are_isolated(tmp_path: Path):
             assert m is not None, "每个并发判题都应独立完成"
             assert int(m.group(1)) < 30
     finally:
+        shutil.rmtree(workdir, ignore_errors=True)
         for _, cg in procs:
             cg.kill_all()
             cg.destroy()
