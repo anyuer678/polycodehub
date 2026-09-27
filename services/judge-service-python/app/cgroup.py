@@ -7,6 +7,8 @@
   的准确峰值计量 + OOM 杀死的显式证据（wait4 ru_maxrss 对 page cache 与 OOM 是盲区）。
 - memory.swap.max=0：判题不换页——有 swap 时超限退化为换页回收而非 OOM，
   MLE 证据（oom_kill）永远不会出现（2026-09 镜像内实测发现并修复）。
+- cpu.max（可选，见 create 的 cpu_max 参数）：CPU 带宽兜底，超限是节流而非信号；
+  TLE 信号源仍由 RLIMIT_CPU（SIGXCPU）承担，两层语义关系见 THREAT_MODEL.md。
 
 设计约束：
 - 所有路径/根目录可注入（单测用 tmp 目录模拟 cgroupfs，无需 Linux/root）。
@@ -67,11 +69,16 @@ class JudgeCgroup:
         root: str = CGROUP_ROOT_DEFAULT,
         name: str | None = None,
         owner_uid: int | None = None,
+        cpu_max: str | None = None,
     ) -> "JudgeCgroup":
         """创建 polycode-judge/<name> 子组并写入 memory.max / pids.max。
 
         owner_uid：chown 子组目录给 sandbox 用户（helper 子进程需自行写 cgroup.procs）。
-        控制器未下放（subtree_control）时先尽力启用；失败抛 CgroupUnavailable。
+        cpu_max：非空时写入 cpu.max（格式同内核："<quota_us> <period_us>"，quota
+        为 "max" 表示不限带宽；如 "50000 100000" = 半核）。角色是【带宽兜底】——
+        超限节流不产生信号，TLE 判定仍由 RLIMIT_CPU/SIGXCPU 与引擎 wall-clock 承担。
+        控制器未下放（subtree_control）时先尽力启用（cpu_max 非空时含 +cpu）；
+        失败抛 CgroupUnavailable。
         """
         if not os.path.isfile(os.path.join(root, "cgroup.controllers")):
             raise CgroupUnavailable(f"{root} is not a cgroup v2 root (missing cgroup.controllers)")
@@ -80,7 +87,10 @@ class JudgeCgroup:
         subtree = Path(root) / "cgroup.subtree_control"
         if controllers.is_file() and subtree.is_file():
             have = controllers.read_text(encoding="utf-8").split()
-            want = [f"+{c}" for c in ("memory", "pids") if c in have]
+            wanted = ["memory", "pids"]
+            if cpu_max:
+                wanted.append("cpu")
+            want = [f"+{c}" for c in wanted if c in have]
             if want:
                 try:
                     subtree.write_text(" ".join(want), encoding="utf-8")
@@ -99,6 +109,8 @@ class JudgeCgroup:
         try:
             (Path(path) / "memory.max").write_text(f"{mem_kb * 1024}\n", encoding="utf-8")
             (Path(path) / "pids.max").write_text(f"{pids_max}\n", encoding="utf-8")
+            if cpu_max:
+                (Path(path) / "cpu.max").write_text(f"{cpu_max}\n", encoding="utf-8")
         except OSError as exc:
             raise CgroupUnavailable(f"write limits in {path}: {exc}") from exc
         # 判题不换页：有 swap 时 memory.max 超限退化为「回收换页」而非 OOM 击杀，
@@ -131,6 +143,19 @@ class JudgeCgroup:
             with open(os.path.join(self.path, "memory.events"), encoding="utf-8") as f:
                 for line in f:
                     if line.startswith("oom_kill"):
+                        return int(line.split()[1])
+        except (OSError, ValueError, IndexError):
+            pass
+        return None
+
+    def cpu_throttled_usec(self) -> int | None:
+        """cpu.stat 中 throttled_usec（被节流的总时长，微秒）；文件缺失返回 None。
+
+        仅作 cpu.max 生效的显式证据（与 oom_kill 同思路），不参与判题语义。"""
+        try:
+            with open(os.path.join(self.path, "cpu.stat"), encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("throttled_usec"):
                         return int(line.split()[1])
         except (OSError, ValueError, IndexError):
             pass

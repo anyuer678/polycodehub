@@ -70,6 +70,12 @@ CGROUP_MODE = {
     "auto": "auto",
 }.get(os.environ.get("JUDGE_CGROUP", "off").strip().lower(), "off")
 
+# cpu.max 带宽兜底（独立开关，与 JUDGE_CGROUP 正交）：JUDGE_CGROUP_CPU_MAX 未设/空 =
+# 关闭（默认，行为与历史一致）；设为 "<quota_us> <period_us>"（如 "50000 100000" = 半核）
+# 或 "max"（解除限）即写入判题子组的 cpu.max。超限是【节流】而非信号，不改变 TLE 判定：
+# RLIMIT_CPU（SIGXCPU）仍是 TLE 信号源，引擎 wall-clock 超时兜底；配额关系见 THREAT_MODEL.md。
+CGROUP_CPU_MAX: Optional[str] = os.environ.get("JUDGE_CGROUP_CPU_MAX", "").strip() or None
+
 # sandbox_helper 的 cgroup 遥测标记：`__SB_CGROUP__=<peak_kb>,oom=<n>`，
 # 紧贴 __SB_RUSAGE__ 之前（末两行才可信，防用户伪造，与 RUSAGE 同策略）。
 CGROUP_MARKER_RE = re.compile(r"^__SB_CGROUP__=(\d+),oom=(\d+)[ \t]*(?:\r\n|\r|\n)?$")
@@ -405,7 +411,8 @@ class RealJudgeEngine(JudgeEngine):
         try:
             if not cgroup_v2_available():
                 raise CgroupUnavailable("cgroup v2 unified hierarchy not writable")
-            return JudgeCgroup.create(mem_kb=mem_kb, pids_max=pids, owner_uid=SANDBOX_UID)
+            return JudgeCgroup.create(mem_kb=mem_kb, pids_max=pids, owner_uid=SANDBOX_UID,
+                                      cpu_max=CGROUP_CPU_MAX)
         except CgroupUnavailable as exc:
             if CGROUP_MODE == "require":
                 raise
