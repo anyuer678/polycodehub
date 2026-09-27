@@ -120,11 +120,30 @@ FIX_LOG 回归表：[REGRESSION_FROM_FIXLOG.md](REGRESSION_FROM_FIXLOG.md)。
 - 附着失败（helper 子进程写 `cgroup.procs` 失败）→ `__SB_ERROR__=cgroup attach failed` +
   **exit 125**，绝不裸跑用户代码。
 
+#### cpu.max 带宽兜底（独立开关，JUDGE_CGROUP_CPU_MAX）
+
+| 配置 | 语义 |
+|------|------|
+| `JUDGE_CGROUP_CPU_MAX` 未设/空（默认） | 不写 `cpu.max`，行为与历史一致 |
+| `JUDGE_CGROUP_CPU_MAX="50000 100000"` | 每判题 CPU 带宽 = 半核（quota period，单位微秒） |
+| `JUDGE_CGROUP_CPU_MAX="max"` | 显式解除带宽限制（等于关闭节流） |
+
+- **角色定位（issue #23 的设计决策）**：`cpu.max` 是【带宽兜底】——防止单判题长时间
+  吃满整核拖垮宿主；超限是**节流**（变慢）而非信号，**不参与 TLE 判定**。
+- **TLE 语义协调**：TLE 信号源仍是 `RLIMIT_CPU`（SIGXCPU，helper 的 `SB_CPU_S`）+
+  引擎 wall-clock 超时；节流只会拉长 wall 时间，两者最终都表现为 TLE，
+  判定边界不变。配额关系：`cpu.max` 配额应 ≥ 1 核（默认思路），保证
+  `RLIMIT_CPU` 的 CPU 秒预算在 wall 上至多被拉长 `period/quota` 倍。
+- 生效证据：`cpu.stat` 的 `throttled_usec`（`JudgeCgroup.cpu_throttled_usec()`），
+  与 `oom_kill` 同思路的显式证据，不参与判题语义。
+- 启用 `cpu.max` 需要根层级可写并下放 `+cpu` 控制器（create 自动尝试）。
+
 ### 测试覆盖
 
-- `tests/test_cgroup_unit.py`：伪 cgroupfs 上的创建/附着/遥测/清理 + 三种模式降级 + 标记解析 —— **CI 必跑（无需 root）**
+- `tests/test_cgroup_unit.py`：伪 cgroupfs 上的创建/附着/遥测/清理 + 三种模式降级 + 标记解析 + cpu.max 写入与 +cpu 下放 —— **CI 必跑（无需 root）**
 - `tests/sandbox_adversarial/test_cgroup.py`：fork 炸弹被 pids.max 拦截、OOM 有 oom_kill 证据、
-  附着失败 fail-closed、并发判题互不污染、与白名单叠加 —— **adversarial CI（root）实测**
+  附着失败 fail-closed、并发判题互不污染、与白名单叠加、cpu.max 节流（wall/cpu 比例 +
+  throttled_usec）与 RLIMIT_CPU TLE 信号源保持 —— **adversarial CI（root）实测**
 
 ### 部署前提
 

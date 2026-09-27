@@ -86,7 +86,8 @@ def _full_env() -> bool:
 
 def _run_in_cgroup(code: str, tmp_path: Path, mem_kb: int, pids: int,
                    argv: list[str] | None = None,
-                   env_extra: dict | None = None) -> tuple[subprocess.CompletedProcess, JudgeCgroup]:
+                   env_extra: dict | None = None,
+                   cpu_max: str | None = None) -> tuple[subprocess.CompletedProcess, JudgeCgroup]:
     """测试自建 cgroup（engine 在真实链路里做的事），经 helper 跑用户代码。
 
     runner 未委托 cgroup 写权限（GH hosted runner 的 cgroup 根对 root 也只读，
@@ -95,7 +96,8 @@ def _run_in_cgroup(code: str, tmp_path: Path, mem_kb: int, pids: int,
     用户脚本放在 /tmp 下 0755 专用目录（pytest tmp_path 整条链 0700，sandbox
     用户不可穿越）。"""
     try:
-        cg = JudgeCgroup.create(mem_kb=mem_kb, pids_max=pids, owner_uid=SANDBOX_UID)
+        cg = JudgeCgroup.create(mem_kb=mem_kb, pids_max=pids, owner_uid=SANDBOX_UID,
+                                cpu_max=cpu_max)
     except CgroupUnavailable as exc:
         pytest.skip(f"cgroup delegation unavailable on this runner: {exc}")
     workdir = tempfile.mkdtemp(prefix="sb-cg-")
@@ -236,6 +238,62 @@ def test_cgroup_with_seccomp_whitelist_stack(tmp_path: Path):
     )
     try:
         assert "HELLO_CG_WL" in (proc.stdout or ""), f"rc={proc.returncode} err={proc.stderr[-500:]}"
+    finally:
+        cg.kill_all()
+        cg.destroy()
+
+
+# ---------- cpu.max（带宽兜底，节流而非信号） ----------
+
+CPU_HOG = (
+    "import time\n"
+    "w0 = time.monotonic()\n"
+    "c0 = time.process_time()\n"
+    "while time.monotonic() - w0 < 2.0:\n"
+    "    pass\n"
+    "wall = time.monotonic() - w0\n"
+    "cpu = time.process_time() - c0\n"
+    "print(f'CPUHOG wall={wall:.2f} cpu={cpu:.2f}')\n"
+)
+
+CPU_HOG_UNBOUNDED = (
+    "while True:\n"
+    "    pass\n"
+)
+
+
+def test_cgroup_cpu_max_throttles_cpu_hog(tmp_path: Path):
+    """cpu.max="50000 100000"（半核）：busy loop 的 wall/cpu ≈ 2（被节流），
+    rc=0 且无信号——超限是节流，不改变 TLE 判定；cpu.stat 的 throttled_usec
+    提供显式节流证据（与 oom_kill 同思路）。"""
+    proc, cg = _run_in_cgroup(CPU_HOG, tmp_path, mem_kb=262144, pids=8,
+                              env_extra={"SB_CPU_S": "10"}, cpu_max="50000 100000")
+    try:
+        assert proc.returncode == 0, f"节流不应致死: rc={proc.returncode} err={proc.stderr[-500:]}"
+        m = re.search(r"CPUHOG wall=([\d.]+) cpu=([\d.]+)", proc.stdout or "")
+        assert m is not None, f"no output: rc={proc.returncode} err={proc.stderr[-500:]}"
+        wall, cpu = float(m.group(1)), float(m.group(2))
+        assert wall >= 1.8, f"busy loop 提前结束: wall={wall}"
+        assert cpu < wall * 0.8, (
+            f"未观察到节流（cpu/wall={cpu / wall:.2f}≈1 表示吃满核）；"
+            "若宿主无 cpu 控制器支持本用例应在 create 处 skip")
+        throttled = cg.cpu_throttled_usec()
+        assert throttled is not None and throttled > 0, "cpu.stat 无节流证据"
+    finally:
+        cg.kill_all()
+        cg.destroy()
+
+
+def test_cgroup_cpu_max_keeps_rlimit_cpu_as_tle_source(tmp_path: Path):
+    """TLE 语义协调：cpu.max 节流拉长 wall 时间，但 RLIMIT_CPU（SIGXCPU）仍是
+    TLE 信号源——SB_CPU_S=1 的无限 busy loop 在累计 1 CPU 秒后被 SIGXCPU 杀死
+    （半核下 wall≈2s；不设 wall 上限是为了避免与节流节奏竞争，见镜像内实测教训），
+    rc≠0。节流层不吞掉、不替代 TLE。"""
+    proc, cg = _run_in_cgroup(CPU_HOG_UNBOUNDED, tmp_path, mem_kb=262144, pids=8,
+                              env_extra={"SB_CPU_S": "1"}, cpu_max="50000 100000")
+    try:
+        assert "CPUHOG" not in (proc.stdout or ""), "busy loop 不应完成"
+        assert proc.returncode != 0, "RLIMIT_CPU 应经 SIGXCPU 终止进程"
     finally:
         cg.kill_all()
         cg.destroy()

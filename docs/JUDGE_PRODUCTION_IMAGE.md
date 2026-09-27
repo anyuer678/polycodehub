@@ -105,6 +105,7 @@ docker compose -f infra/docker/docker-compose.prod.yml up -d
 |----|----------|----------|----------|
 | seccomp 白名单 | `JUDGE_SECCOMP_WHITELIST=1` | 无额外要求（libseccomp 已在镜像内） | 未启用则走黑名单 |
 | cgroup v2 | `JUDGE_CGROUP=off/auto/require` | cgroup v2 可写委托：`cgroup: privileged` + `/sys/fs/cgroup` rw 挂载（或宿主 systemd slice 委托） | auto 静默回退 rlimit；require 抛错 |
+| cpu.max 带宽兜底 | `JUDGE_CGROUP_CPU_MAX="<quota_us> <period_us>"`（如 "50000 100000" = 半核） | 同 cgroup v2（+cpu 控制器随 create 自动下放） | 未设/空则不写 `cpu.max`（默认，行为不变）；节流语义不改变 TLE 判定 |
 | ns + jail | `JUDGE_NS=off/auto/require` | `CAP_SYS_ADMIN`（unshare/mount/chroot/mknod）：`--cap-add SYS_ADMIN --cap-add SYS_CHROOT` | 125 fail-closed；auto 回退非 ns |
 
 compose 片段示例（prod，按需裁剪）：

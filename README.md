@@ -26,7 +26,7 @@
 - **真实判题沙箱** — 四层纵深防御，各层 opt-in 可独立启用、能力不可用时显式降级：
   - `setuid` 降权到专用 sandbox 用户 + 清空补充组（全部模式）
   - **seccomp 双模式**：黑名单（17 条规则，默认）+ **trace 驱动白名单**（`SB_PROFILE` 按语言放行 strace 实测 syscall 集；`socket` 仅 AF_UNIX 域参数过滤；未知 profile 退出 125 fail-closed）
-  - **cgroup v2 按判题隔离**（`JUDGE_CGROUP=off/auto/require`）：`pids.max` 按判题拦截 fork 炸弹（修复 NPROC 按用户计数的并发污染）、`memory.max` 硬上限 + `memory.peak`（含 page cache）+ `oom_kill` 显式 MLE 证据
+  - **cgroup v2 按判题隔离**（`JUDGE_CGROUP=off/auto/require`）：`pids.max` 按判题拦截 fork 炸弹（修复 NPROC 按用户计数的并发污染）、`memory.max` 硬上限 + `memory.peak`（含 page cache）+ `oom_kill` 显式 MLE 证据、可选 `cpu.max` 带宽兜底（`JUDGE_CGROUP_CPU_MAX`，节流而非信号，TLE 判定不变）
   - **namespaces + chroot jail**（`JUDGE_NS=off/auto/require`）：空 netns（无接口）+ PID ns（用户代码 = ns 内 PID 1，宿主进程不可见）+ MOUNT ns + tmpfs 最小根（运行时目录 RO bind、工作目录 RW bind、/proc ns 内挂载）
   - rlimit（虚拟内存 / CPU / 文件大小 / 文件描述符）+ 环境变量清洗（凭据不可见）+ `site-packages` 权限收紧
   - 子进程自身峰值内存统计（`__SB_RUSAGE__`），杜绝累计值导致的假 MLE

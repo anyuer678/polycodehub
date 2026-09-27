@@ -27,7 +27,7 @@ Fully usable on the web, covering problem practice, code submission, real-time j
 - **Real judging sandbox** — four defense layers, each independently opt-in with explicit degradation:
   - `setuid` drops privileges to a dedicated sandbox user + clears supplementary groups (all modes)
   - **seccomp dual mode**: blacklist (17 rules, default) + **trace-driven allowlist** (`SB_PROFILE` per-language syscall set measured with strace; `socket` restricted to the AF_UNIX domain via argument filtering; unknown profile exits 125 fail-closed)
-  - **cgroup v2 per-judgment isolation** (`JUDGE_CGROUP=off/auto/require`): `pids.max` contains fork bombs per judgment (fixing the per-user NPROC cross-worker pollution), `memory.max` hard cap + `memory.peak` (page cache included) + `oom_kill` as explicit MLE evidence
+  - **cgroup v2 per-judgment isolation** (`JUDGE_CGROUP=off/auto/require`): `pids.max` contains fork bombs per judgment (fixing the per-user NPROC cross-worker pollution), `memory.max` hard cap + `memory.peak` (page cache included) + `oom_kill` as explicit MLE evidence, plus an optional `cpu.max` bandwidth backstop (`JUDGE_CGROUP_CPU_MAX`; throttling, never a signal — TLE semantics unchanged)
   - **namespaces + chroot jail** (`JUDGE_NS=off/auto/require`): empty netns (no interfaces at all) + PID ns (user code = PID 1 inside the ns, host processes invisible) + MOUNT ns + tmpfs minimal root (runtime dirs bound read-only, workdir bound read-write, /proc mounted inside the ns)
   - rlimits (virtual memory / CPU / file size / file descriptors) + env scrubbing (credentials invisible) + tightened `site-packages` permissions
   - Per-child peak memory accounting (`__SB_RUSAGE__`), eliminating false MLEs caused by cumulative values

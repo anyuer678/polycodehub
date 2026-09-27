@@ -85,6 +85,32 @@ def test_create_raises_when_root_unwritable(tmp_path: Path):
         JudgeCgroup.create(mem_kb=1024, pids_max=4, root=str(tmp_path / "not-a-cgroup"))
 
 
+# ---------- cpu.max（带宽兜底，独立开关） ----------
+
+
+def test_create_without_cpu_max_leaves_cpu_untouched(fake_cgroupfs: Path):
+    """默认不写 cpu.max、不在 subtree_control 启用 +cpu（行为与历史完全一致）。"""
+    cg = JudgeCgroup.create(mem_kb=1024, pids_max=4, root=str(fake_cgroupfs))
+    assert not (Path(cg.path) / "cpu.max").exists()
+    assert (fake_cgroupfs / "cgroup.subtree_control").read_text().split() == ["+memory", "+pids"]
+
+
+def test_create_with_cpu_max_writes_and_enables_controller(fake_cgroupfs: Path):
+    cg = JudgeCgroup.create(mem_kb=1024, pids_max=4, root=str(fake_cgroupfs),
+                            cpu_max="50000 100000")
+    assert (Path(cg.path) / "cpu.max").read_text().strip() == "50000 100000"
+    assert (fake_cgroupfs / "cgroup.subtree_control").read_text().split() == \
+        ["+memory", "+pids", "+cpu"]
+
+
+def test_cpu_throttled_usec_parses_stat(fake_cgroupfs: Path):
+    cg = JudgeCgroup.create(mem_kb=1024, pids_max=4, root=str(fake_cgroupfs))
+    assert cg.cpu_throttled_usec() is None  # 无 cpu.stat → None
+    (Path(cg.path) / "cpu.stat").write_text(
+        "usage_usec 1000\nthrottled_usec 424242\nnr_throttled 7\n", encoding="utf-8")
+    assert cg.cpu_throttled_usec() == 424242
+
+
 # ---------- engine 标记解析 ----------
 
 
@@ -156,3 +182,22 @@ def test_maybe_cgroup_require_raises(engine_mod, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(engine_mod, "cgroup_v2_available", lambda root="/sys/fs/cgroup": False)
     with pytest.raises(CgroupUnavailable):
         engine_mod.RealJudgeEngine._maybe_cgroup(object(), 1024, 4)
+
+
+def test_maybe_cgroup_passes_cpu_max(engine_mod, monkeypatch: pytest.MonkeyPatch,
+                                     tmp_path: Path):
+    """_maybe_cgroup 把 CGROUP_CPU_MAX 透传给 JudgeCgroup.create。"""
+    mod = importlib.import_module("app.cgroup")
+    captured: dict = {}
+
+    def fake_create(*args, **kwargs):
+        captured.update(kwargs)
+        return mod.JudgeCgroup(path=str(tmp_path / "cg"))
+
+    monkeypatch.setattr(engine_mod, "CGROUP_MODE", "require")
+    monkeypatch.setattr(engine_mod, "cgroup_v2_available", lambda root="/sys/fs/cgroup": True)
+    monkeypatch.setattr(engine_mod, "JudgeCgroup", types.SimpleNamespace(create=fake_create))
+    monkeypatch.setattr(engine_mod, "SANDBOX_UID", 1002)
+    monkeypatch.setattr(engine_mod, "CGROUP_CPU_MAX", "50000 100000")
+    engine_mod.RealJudgeEngine._maybe_cgroup(object(), 1024, 4)
+    assert captured.get("cpu_max") == "50000 100000"
