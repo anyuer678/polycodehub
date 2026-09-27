@@ -5,6 +5,8 @@
   全局计数、彼此污染的语义混乱（sandbox_helper 在 cgroup 模式下跳过 NPROC rlimit）。
 - memory.max / memory.peak / memory.events(oom_kill)：硬性内存上限 + 含 page cache
   的准确峰值计量 + OOM 杀死的显式证据（wait4 ru_maxrss 对 page cache 与 OOM 是盲区）。
+- memory.swap.max=0：判题不换页——有 swap 时超限退化为换页回收而非 OOM，
+  MLE 证据（oom_kill）永远不会出现（2026-09 镜像内实测发现并修复）。
 
 设计约束：
 - 所有路径/根目录可注入（单测用 tmp 目录模拟 cgroupfs，无需 Linux/root）。
@@ -99,6 +101,13 @@ class JudgeCgroup:
             (Path(path) / "pids.max").write_text(f"{pids_max}\n", encoding="utf-8")
         except OSError as exc:
             raise CgroupUnavailable(f"write limits in {path}: {exc}") from exc
+        # 判题不换页：有 swap 时 memory.max 超限退化为「回收换页」而非 OOM 击杀，
+        # MLE 语义失效且延迟不可预测（镜像内实测 2026-09：WSL2/Docker Desktop VM
+        # 带 swap，512MB 分配在 64MB max 下靠换页存活，oom_kill=0）。缺文件/无权限容忍。
+        try:
+            (Path(path) / "memory.swap.max").write_text("0\n", encoding="utf-8")
+        except OSError:
+            pass
         if owner_uid is not None and hasattr(os, "chown"):
             try:
                 os.chown(path, owner_uid, -1)

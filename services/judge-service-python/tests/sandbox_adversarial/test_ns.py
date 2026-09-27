@@ -194,17 +194,25 @@ def test_ns_fork_bomb_contained_with_cgroup(tmp_path: Path):
     from app.cgroup import CgroupUnavailable, JudgeCgroup
 
     code = (
-        "import os\n"
+        # pids.max 约束并发任务数：子进程须存活才能顶满上限（见 test_cgroup.py FORK_BOMB 注释）
+        "import os, time\n"
         "ok = 0\n"
+        "kids = []\n"
         "for _ in range(30):\n"
         "    try:\n"
         "        pid = os.fork()\n"
         "    except OSError:\n"
-        "        continue\n"
+        "        break\n"
         "    if pid == 0:\n"
+        "        time.sleep(5)\n"
         "        os._exit(0)\n"
-        "    os.waitpid(pid, 0)\n"
+        "    kids.append(pid)\n"
         "    ok += 1\n"
+        "for pid in kids:\n"
+        "    try:\n"
+        "        os.waitpid(pid, 0)\n"
+        "    except OSError:\n"
+        "        pass\n"
         "print('FORKS', ok)\n"
     )
     workdir = tempfile.mkdtemp(prefix="sb-wd-")
@@ -224,6 +232,8 @@ def test_ns_fork_bomb_contained_with_cgroup(tmp_path: Path):
         "SB_UID": str(SANDBOX_UID),
         "SB_GID": str(SANDBOX_GID),
         "SB_NS": "1",
+        # 与 _run_ns 一致：SB_NS_DIRS_RO 无默认值，缺了 jail 内没有 python3 → execvp ENOENT
+        "SB_NS_DIRS_RO": "/usr,/lib,/lib64,/bin",
         "SB_NS_NEWROOT": newroot,
         "SB_CGROUP": cg.path,
     })
