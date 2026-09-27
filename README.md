@@ -17,7 +17,7 @@
 <p align="center"><img src="preview.png" alt="PolyCodeHub 平台首页预览" width="800"></p>
 
 
-> **安全边界说明**：沙箱为进程级纵深防御——setuid 降权 + seccomp（黑名单默认 / **trace 驱动白名单** opt-in）+ cgroup v2（pids/memory 按判题隔离，opt-in）+ namespaces & chroot jail（opt-in）+ rlimit + env 清洗。**仍不是容器级隔离、未做多租户审计**。各层启用开关、能力校验与未修复项见 [THREAT_MODEL.md](THREAT_MODEL.md) 与 [docs/SANDBOX_TESTING.md](docs/SANDBOX_TESTING.md)，演进全记录见[站点笔记](https://anyuer678.github.io/yuer.dev/notes/polycodehub-sandbox-notes/)。隐藏测试用例已从 API 查询层脱敏。请勿在不受信任的多租户场景下使用。
+> **安全边界说明**：沙箱为进程级纵深防御——setuid 降权 + seccomp（黑名单默认 / **trace 驱动白名单** opt-in）+ cgroup v2（pids/memory 按判题隔离，opt-in）+ namespaces & chroot jail（opt-in）+ rlimit + env 清洗。**仍不是容器级隔离、未做多租户审计**。各层启用开关、能力校验与未修复项见 [THREAT_MODEL.md](THREAT_MODEL.md) 与 [docs/SANDBOX_TESTING.md](docs/SANDBOX_TESTING.md)，镜像内红队自查记录见 [docs/REDTEAM_NOTES.md](docs/REDTEAM_NOTES.md)，演进全记录见[站点笔记](https://anyuer678.github.io/yuer.dev/notes/polycodehub-sandbox-notes/)。隐藏测试用例已从 API 查询层脱敏。请勿在不受信任的多租户场景下使用。
 
 ## 功能特性
 
