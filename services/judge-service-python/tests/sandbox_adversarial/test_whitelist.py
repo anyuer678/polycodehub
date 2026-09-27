@@ -2,9 +2,9 @@
 
 前置：与 test_blocked.py 相同（root + netblock + sandbox user）。
 在 CI（ubuntu-latest + gcc + node）实测 curated bootstrap 名单是否够用：
-- python / c / node 的"正常运行"用例是名单充分性的经验证；
+- python / c / node / java 的"正常运行"用例是名单充分性的经验证；
 - 阻断用例证明白名单收紧后网络/调试/未知 profile 语义不变（fail-closed）。
-java 名单为 experimental：本机无 JDK 时自动跳过。
+java 需完整 JDK（含 server JVM）：CI 由 zulu 提供；本地无 JDK 时自动跳过。
 """
 
 from __future__ import annotations
@@ -190,19 +190,34 @@ def test_whitelist_node_runs(tmp_path: Path):
 
 @pytest.mark.skipif(
     os.environ.get("SB_TEST_JAVA") != "1",
-    reason="java 名单 experimental：GitHub runner 的 JDK 缺 server JVM，仅在有完整 JDK 的环境显式开启（SB_TEST_JAVA=1）",
+    reason="java profile 需完整 JDK（含 server JVM）：CI 由 SB_TEST_JAVA=1 显式开启，本地无 JDK 自动跳过",
 )
-def test_whitelist_java_runs_experimental(tmp_path: Path):
+def test_whitelist_java_runs(tmp_path: Path):
     if not (_full_env() and shutil.which("javac") and shutil.which("java")):
         pytest.skip("root + netblock + sandbox user + JDK required")
-    src = tmp_path / "Main.java"
-    src.write_text(
-        "public class Main{public static void main(String[] a){System.out.println(\"HELLO_WL_JAVA\");}}\n",
-        encoding="utf-8",
-    )
-    subprocess.run(["javac", "-d", str(tmp_path), str(src)], check=True, timeout=120)
-    proc = _run_helper_cmd(
-        ["java", "-cp", str(tmp_path), "Main"],
-        env_extra={"SB_PROFILE": "java"},
-    )
-    assert "HELLO_WL_JAVA" in (proc.stdout or ""), f"rc={proc.returncode} err={proc.stderr[-1000:]}"
+    # pytest 的 tmp_path 属 root 且 0700，sandbox 用户无法穿越（同 test_whitelist_c_binary_runs）
+    # → 用 /tmp（1777）下专用目录；JVM 虚拟内存预留与线程数远超默认限额 → 放宽 mem/nproc/cpu
+    workdir = tempfile.mkdtemp(prefix="sb-wl-java-")
+    try:
+        os.chmod(workdir, 0o755)
+        src = Path(workdir) / "Main.java"
+        src.write_text(
+            "public class Main{public static void main(String[] a){System.out.println(\"HELLO_WL_JAVA\");}}\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["javac", "-d", workdir, str(src)], check=True, timeout=180)
+        # JVM 默认预留 1GB CompressedClassSpaceSize 虚拟内存，会撞 RLIMIT_AS（实测
+        # 2026-09 CI：Could not allocate compressed class space）→ 显式调小；
+        # -Xmx 同步收紧堆预留。这些是判题侧本来就该传的 JVM 参数。
+        proc = _run_helper_cmd(
+            ["java", "-Xmx128m", "-XX:CompressedClassSpaceSize=64m", "-cp", workdir, "Main"],
+            env_extra={
+                "SB_PROFILE": "java",
+                "SB_MEM_KB": "2097152",
+                "SB_NPROC": "64",
+                "SB_CPU_S": "10",
+            },
+        )
+        assert "HELLO_WL_JAVA" in (proc.stdout or ""), f"rc={proc.returncode} err={proc.stderr[-1000:]}"
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)

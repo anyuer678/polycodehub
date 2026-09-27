@@ -55,8 +55,8 @@ BASELINE: set[str] = {
 EXCLUDE: set[str] = {"socket"}
 
 # curated bootstrap 模式的各语言增集（相对 BASELINE）。
-# java / build-* 为 experimental：JVM 与编译器 syscall 面大，尚未在 CI 实测跑通，
-# 启用前必须先用 trace_syscalls.sh 在目标镜像里采集复核。
+# java / build-java：已在 CI 实证（sandbox-adversarial：strace 采集 + SB_TEST_JAVA=1
+# 沙箱内 javac/java hello 全链路，ubuntu-latest + zulu 完整 JDK，2026-09）。
 CURATED_EXTRA: dict[str, set[str]] = {
     "c": set(),
     "python": {"flock"},
@@ -135,7 +135,7 @@ def emit_header(profiles: dict[str, set[str]], mode: str, now: str) -> str:
         lines.append(" * 来源: curated bootstrap（人工基线 + 各语言增集）；")
         lines.append(" * 正式启用前应在目标镜像用 scripts/trace_syscalls.sh 重新采集并覆盖本文件。")
     lines.append(" * socket 不在名单内：由 netblock 以参数过滤仅放行 AF_UNIX 域。")
-    lines.append(" * java / build-java 为 experimental（未在 CI 实测）。")
+    lines.append(" * java / build-java 已在 CI 实证（strace 采集 + SB_TEST_JAVA=1 沙箱全链路）。")
     lines.append(" */")
     lines.append("#ifndef SANDBOX_PROFILES_H")
     lines.append("#define SANDBOX_PROFILES_H")

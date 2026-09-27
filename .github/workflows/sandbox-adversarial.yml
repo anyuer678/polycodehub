@@ -32,6 +32,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libseccomp-dev gcc strace
 
+      # #24：java 白名单实证需要完整 JDK（含 server JVM / libjvm.so）。
+      # zulu 发行版自带 server VM；temurin runner 默认 JDK 缺 libjvm.so 才被门控。
+      - name: Set up full JDK (zulu, includes server JVM)
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "21"
+
       - name: Trace real syscall sets & regenerate profiles (CI-validated lists)
         run: |
           chmod +x scripts/trace_syscalls.sh
@@ -42,11 +50,20 @@ jobs:
           SB_TRACE_DIR=traces scripts/trace_syscalls.sh node -- node -e "console.log('trace')"
           echo 'int main(){return 0;}' > /tmp/b.c
           SB_TRACE_DIR=traces scripts/trace_syscalls.sh build-c -- gcc -O2 -o /tmp/b /tmp/b.c
+          # java / build-java：与测试同负载（javac 编译 + java 运行 hello world）
+          mkdir -p /tmp/jt
+          printf 'public class Main{public static void main(String[] a){System.out.println("HELLO_WL_JAVA");}}\n' > /tmp/jt/Main.java
+          SB_TRACE_DIR=traces scripts/trace_syscalls.sh build-java -- javac -d /tmp/jt /tmp/jt/Main.java
+          SB_TRACE_DIR=traces scripts/trace_syscalls.sh java -- java -Xmx256m -cp /tmp/jt Main
           python scripts/gen_whitelist.py --mode traces --trace-dir traces --out sandbox_profiles.h
           echo "--- traced syscall counts ---"
           wc -l traces/*.syscalls
           echo "--- node.syscalls ---"
           cat traces/node.syscalls
+          echo "--- java.syscalls ---"
+          cat traces/java.syscalls
+          echo "--- build-java.syscalls ---"
+          cat traces/build-java.syscalls
           echo "--- c vs committed header diff (informational) ---"
           git diff --stat -- sandbox_profiles.h || true
 
@@ -82,6 +99,7 @@ jobs:
           SANDBOX_NETBLOCK: /usr/local/bin/sandbox_netblock
           SB_SANDBOX_UID: "1002"
           SB_SANDBOX_GID: "1001"
+          SB_TEST_JAVA: "1"
         run: |
           set -euo pipefail
           sudo -E env "PATH=$PATH" python -m pytest tests/sandbox_adversarial -q --tb=short -rA | tee /tmp/sb_pytest.txt
