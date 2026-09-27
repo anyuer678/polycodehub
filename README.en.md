@@ -18,7 +18,7 @@ Fully usable on the web, covering problem practice, code submission, real-time j
 <p align="center"><img src="preview.png" alt="PolyCodeHub home preview" width="800"></p>
 
 
-> **Security boundary note**: the sandbox is process-level defense in depth — setuid drop + seccomp (blacklist by default / **trace-driven allowlist** opt-in) + cgroup v2 (per-judgment pids/memory isolation, opt-in) + namespaces & chroot jail (opt-in) + rlimit + env scrubbing. **It is still not container-grade isolation and has not been audited for multi-tenancy.** Per-layer switches, capability checks and open items: [THREAT_MODEL.md](THREAT_MODEL.md) and [docs/SANDBOX_TESTING.md](docs/SANDBOX_TESTING.md); the full evolution story: [sandbox evolution note](https://anyuer678.github.io/yuer.dev/notes/polycodehub-sandbox-notes/). Hidden test cases are redacted at the API query layer. Do not use it in untrusted multi-tenant scenarios.
+> **Security boundary note**: the sandbox is process-level defense in depth — setuid drop + seccomp (blacklist by default / **trace-driven allowlist** opt-in) + cgroup v2 (per-judgment pids/memory isolation, opt-in) + namespaces & chroot jail (opt-in) + rlimit + env scrubbing. **It is still not container-grade isolation and has not been audited for multi-tenancy.** Per-layer switches, capability checks and open items: [THREAT_MODEL.md](THREAT_MODEL.md) and [docs/SANDBOX_TESTING.md](docs/SANDBOX_TESTING.md); image-internal red-team self-audit: [docs/REDTEAM_NOTES.md](docs/REDTEAM_NOTES.md) (in Chinese); the full evolution story: [sandbox evolution note](https://anyuer678.github.io/yuer.dev/notes/polycodehub-sandbox-notes/). Hidden test cases are redacted at the API query layer. Do not use it in untrusted multi-tenant scenarios.
 
 ## Features
 

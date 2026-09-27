@@ -106,6 +106,8 @@ Honesty section — what this deployment does **not** claim:
   (runs the blocked-syscall suite against a real judge image)
 - Full containerized escape-testing requires Docker; see
   `docs/SANDBOX_TESTING.md` and the repository's disclosed follow-up item.
+- Image-internal red-team self-audit (findings, methodology, honest boundaries,
+  in Chinese): `docs/REDTEAM_NOTES.md`.
 
 ### 3.1.1 Opt-in seccomp whitelist layer (added 2026-09)
 
