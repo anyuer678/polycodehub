@@ -134,6 +134,18 @@ Honesty section — what this deployment does **not** claim:
   `memory.events:oom_kill` give honest MLE evidence via the
   `__SB_CGROUP__=<peak>,oom=<n>` marker. Attach failure in sandbox_helper
   exits 125 (fail-closed).
+- **`cpu.max` bandwidth backstop (opt-in, added 2026-09, issue #23):**
+  `JUDGE_CGROUP_CPU_MAX="<quota_us> <period_us>"` caps per-judgment CPU
+  bandwidth (e.g. half a core). Deliberately *throttle-only* semantics: TLE
+  determination stays with `RLIMIT_CPU` (SIGXCPU, `SB_CPU_S`) as the signal
+  source plus the engine wall-clock timeout; `cpu.max` merely stretches wall
+  time and never fires a signal, so the TLE decision boundary is unchanged.
+  Quota rule: keep the bandwidth quota >= 1 core equivalent so the
+  `RLIMIT_CPU` CPU-second budget is stretched by at most `period/quota`.
+  `cpu.stat:throttled_usec` provides explicit throttling evidence (same
+  philosophy as `oom_kill`); empirical container tests cover both the
+  throttle ratio and that SIGXCPU still terminates under throttling
+  (`tests/sandbox_adversarial/test_cgroup.py`).
 - Mitigation class: S3.1/T1 resource exhaustion and rlimit semantic gaps.
 - Status: unit-tested with a fake cgroupfs; adversarial coverage runs on
   cgroup-v2-capable runners. Deployment requires writable cgroup delegation
