@@ -113,6 +113,8 @@ FIX_LOG 回归表：[REGRESSION_FROM_FIXLOG.md](REGRESSION_FROM_FIXLOG.md)。
   按【用户】全局计数、互相污染的老问题（cgroup 模式下 helper 跳过 NPROC rlimit）。
 - `memory.max`：硬上限；超限 OOM kill，`memory.events` 的 `oom_kill` 计数经
   `__SB_CGROUP__=...,oom=1` 标记回传，engine 据此判 **MLE**（不再依赖 rc 猜测）。
+- `memory.swap.max=0`：判题不换页——有 swap 的宿主（如 Docker Desktop/WSL2 VM）上，
+  超限会退化为「回收换页」而非 OOM，`oom_kill` 永远不出现（2026-09 镜像内实测发现并修复）。
 - `memory.peak`：含 page cache 的准确峰值，engine 优先采信（`_parse_sandbox_markers`：
   末两行信任位置 + 全位置剥离防伪造，与 rusage 同策略）。
 - 附着失败（helper 子进程写 `cgroup.procs` 失败）→ `__SB_ERROR__=cgroup attach failed` +
