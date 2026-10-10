@@ -138,6 +138,15 @@ polycodehub/
 └── LICENSE                     # GPL-3.0
 ```
 
+## 生态
+
+本项目属于 [作品体系](https://anyuer678.github.io/yuer.dev/map) 中的 **训练评测平台** 主线——定位为在线判题 OJ（Cgroup v2 沙箱 pids/memory/swap/cpu 四维隔离，见 [THREAT_MODEL.md](./THREAT_MODEL.md)）。
+
+同一体系内相关项目：
+
+- [codedrill](https://github.com/anyuer678/codedrill) —— 离线代码抄写训练（635 题库 + SRS）。与本仓库构成「在线真实判分 + 离线抄写强化」学习闭环：本仓库题解代码可转换为其自定义题库（转换工具规划中）
+- [yuer.dev](https://github.com/anyuer678/yuer.dev) —— 作品集门面站（作品地图：https://anyuer678.github.io/yuer.dev/map）
+
 ## 免责声明
 
 本项目按 **GPL-3.0** 协议以"现状"（AS IS）提供，作者与贡献者**不对使用本项目产生的任何直接、间接、偶然或后果性损失负责**，包括但不限于：实际生产/生活环境中的业务故障、数据丢失、服务中断、安全事件等任何恶劣结果。若需将本项目用于实际生产或业务场景，请自行充分评估风险，并**按需修改代码以满足你的实际需求**；任何因使用本项目（含修改后版本）造成的影响，均由使用者自行承担。
