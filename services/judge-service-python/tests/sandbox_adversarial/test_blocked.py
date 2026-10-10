@@ -127,12 +127,18 @@ def test_sandbox_rejects_ptrace(tmp_path):
     reason="need root + netblock + sandbox user",
 )
 def test_sandbox_blocks_write_system_path(tmp_path):
-    target = Path("/tmp/sb-pwn-test-should-not-exist")
+    # 目标必须是 uid 1002 真实无权写的路径（DAC）：此前用 /tmp 下路径——
+    # 修好 harness 可穿越后实测 WROTE 真的写进去了（进程级沙箱不拦 /tmp
+    # 写，原断言靠 EACCES 空转假绿，外部审查 2026-10 + 本修复实证）。
+    target = Path("/etc/sb-pwn-test-should-not-exist")
     if target.exists():
         target.unlink()
     code = f"open({str(target)!r},'w').write('x')\nprint('WROTE')\n"
     proc = _run_helper(code, tmp_path)
     assert "WROTE" not in (proc.stdout or "")
+    assert not target.exists(), "系统路径被写入！"
+    if target.exists():
+        target.unlink()
     assert not target.exists()
 
 
