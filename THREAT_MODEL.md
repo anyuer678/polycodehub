@@ -97,6 +97,14 @@ Honesty section — what this deployment does **not** claim:
    deliberately does not mount `/sys`; runtimes depending on CPU-topology
    sysfs probing are unsupported in jail mode. A selective read-only bind
    (`/sys/devices/system/cpu`) is a possible future opt-in, not enabled.
+7. **Single sandbox UID (accepted risk).** All submissions run as the same
+   `SB_SANDBOX_UID` (1002): per-task workdirs are `mkdtemp`'d under a root
+   owned by that uid, so DAC provides no cross-submission isolation — a
+   submission can read/write other (including concurrent) submissions' work
+   directories. Mitigations that apply per-task instead: cgroup v2 isolation
+   (`JUDGE_CGROUP`), namespace jail (`JUDGE_NS`), and workdir cleanup after
+   each judgment. Per-task UID allocation is a possible v2 hardening, not
+   implemented. (Flagged by external code review, 2026-10.)
 
 ## 5. Verification hooks
 
