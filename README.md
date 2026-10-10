@@ -144,7 +144,7 @@ polycodehub/
 
 同一体系内相关项目：
 
-- [codedrill](https://github.com/anyuer678/codedrill) —— 离线代码抄写训练（635 题库 + SRS）。与本仓库构成「在线真实判分 + 离线抄写强化」学习闭环：本仓库题解代码可转换为其自定义题库（转换工具规划中）
+- [codedrill](https://github.com/anyuer678/codedrill) —— 离线代码抄写训练（635 题库 + SRS）。与本仓库构成「在线真实判分 → 离线抄写强化」学习闭环：本仓库题目 AC 后发布题解，题解审核通过（approved）即可在 codedrill 侧用 [`scripts/ph2drill.mjs`](https://github.com/anyuer678/codedrill/blob/master/scripts/ph2drill.mjs) 转换为抄写题导入其自定义题库——先真实判分，再肌肉记忆，最后回本仓库重交验证
 - [yuer.dev](https://github.com/anyuer678/yuer.dev) —— 作品集门面站（作品地图：https://anyuer678.github.io/yuer.dev/map）
 
 ## 免责声明
