@@ -52,7 +52,13 @@ def _sandbox_user_ready() -> bool:
 
 
 def _run_helper(code: str, tmp_path: Path, env_extra: dict | None = None) -> subprocess.CompletedProcess:
-    py = tmp_path / "user.py"
+    # 用户脚本放 /tmp 下 0755 专用目录：pytest tmp_path 整条链 root:0700，
+    # sandbox 用户不可穿越（judge 镜像内实测；test_cgroup 同型修复 2026-09）。
+    # GH runner 的 tmp_path 恰好可穿越，正向对照会掩盖此处——两环境须都成立。
+    import tempfile
+    workdir = tempfile.mkdtemp(prefix="sb-blocked-")
+    os.chmod(workdir, 0o755)
+    py = Path(workdir) / "user.py"
     py.write_text(code, encoding="utf-8")
     env = os.environ.copy()
     env.setdefault("SANDBOX_NETBLOCK", SANDBOX_NETBLOCK)

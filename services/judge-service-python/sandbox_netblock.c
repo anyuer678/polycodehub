@@ -268,6 +268,13 @@ static int install_blacklist(void) {
     /* ===== 调试防护 ===== */
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(ptrace));
 
+    /* ===== 会话/进程组固化 =====
+     * 用户代码不得脱离 engine 的进程组（start_new_session + killpg 清理），
+     * 否则 setsid() + sleep 即可造出 killpg 够不着的孤儿进程（外部审查 2026-10
+     * 发现；RLIMIT_CPU 对 sleep 不生效，孤儿跨判题累积）。setpgrp == setpgid。 */
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(setsid));
+    ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(setpgid));
+
     /* ===== 文件系统防护 ===== */
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(mount));
     ADD_RULE0(ctx, SCMP_ACT_ERRNO(EPERM), SCMP_SYS(umount2));

@@ -454,12 +454,15 @@ router.post('/submissions/:id/rejudge', requireAdmin, asyncHandler(async (req, r
 }));
 
 /** 生成排行榜 weekly/monthly Redis key，与 judge-service redis.period_keys 对齐。
- *  传 date 时按该时间点计算（用于 rejudge 回退原始判定周期的计数），缺省用当前时间。 */
+ *  传 date 时按该时间点计算（用于 rejudge 回退原始判定周期的计数），缺省用当前时间。
+ *  周锚点为周一（UTC），与 constants.weeklyKey / redis.period_keys 一致——
+ *  此前用 `dayOfWeek*86400000`（周日锚）导致周日/周六回退打到不存在的 key。 */
 function getWeekKey(date?: string): string {
   const base = date ? new Date(date) : new Date();
-  const dayOfWeek = base.getUTCDay(); // 0=Sun
-  const mondayMs = Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate()) - dayOfWeek * 86400000;
-  const monday = new Date(mondayMs);
+  const day = base.getUTCDay(); // 0=Sun
+  const diff = day === 0 ? 6 : day - 1; // 回退到本周一
+  const monday = new Date(base);
+  monday.setUTCDate(monday.getUTCDate() - diff);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${monday.getUTCFullYear()}-${pad(monday.getUTCMonth() + 1)}-${pad(monday.getUTCDate())}`;
 }

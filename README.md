@@ -102,7 +102,7 @@ docker compose -f infra/docker/docker-compose.yml --env-file infra/docker/.env u
 | Judge API Health | http://localhost:8082/health |
 | RabbitMQ 管理台 | http://localhost:15672 |
 
-> 说明：认证服务（8081）与数据库等仅容器内网可达，不暴露宿主端口（防绕过网关限流）。
+> 说明：认证服务（8081）host 端口**刻意不发布**，全部认证流量走网关限流；Postgres/Redis/RabbitMQ 宿主端口默认发布（便于本地调试，可用 `.env` 端口变量改为 `127.0.0.1` 绑定或不映射）——**本地/作品集部署的接受风险，切勿原样暴露公网**（详见 THREAT_MODEL.md T10）。
 
 ### 停止与清理
 
