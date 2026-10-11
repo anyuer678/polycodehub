@@ -17,6 +17,7 @@ jobs:
   web:
     name: Web (Next.js build)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -34,6 +35,7 @@ jobs:
   judge:
     name: Judge service (pytest + coverage artifact)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -70,6 +72,7 @@ jobs:
   fixlog-regressions:
     name: FIX_LOG source regressions
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -84,6 +87,7 @@ jobs:
   gateway-pure-node:
     name: Gateway pure auth (Node type-strip)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
