@@ -11,10 +11,10 @@ jobs:
     name: Web (Next.js build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
       - name: Install & build
         working-directory: apps/web
         run: |
@@ -28,8 +28,8 @@ jobs:
     name: Judge service (pytest + coverage artifact)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install deps & unit tests
@@ -53,7 +53,7 @@ jobs:
             --cov=app --cov-report=xml:coverage.xml || true
       - name: Upload coverage summary artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: judge-coverage-xml
           path: services/judge-service-python/coverage.xml
@@ -64,8 +64,8 @@ jobs:
     name: FIX_LOG source regressions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Run source-level security regressions
@@ -78,8 +78,8 @@ jobs:
     name: Gateway pure auth (Node type-strip)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Run pure auth-pure tests without Express
